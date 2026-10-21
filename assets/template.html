@@ -4948,6 +4948,23 @@
       transform-origin: left center;
     }
     html[data-preset="blueprint"] .drilldown-detail { border-radius: 0.3rem; }
+    /* Node detail panel for main diagram nodes - shared right panel */
+    #node-detail-panel {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 560px;
+      max-height: 100vh;
+      overflow-y: auto;
+      z-index: 55;
+      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
+      border: 1px solid var(--toolbar-border);
+      border-radius: 0.85rem;
+      background: var(--toolbar-menu-bg);
+      color: var(--toolbar-text);
+    }
+    #node-detail-panel[hidden] { display: none; }
+    html[data-preset="blueprint"] #node-detail-panel { border-radius: 0.3rem; }
     .drilldown-detail-head {
       display: flex;
       align-items: baseline;
@@ -4962,6 +4979,34 @@
       opacity: 0.72;
       overflow-wrap: anywhere;
     }
+    .drilldown-detail-tabs {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--toolbar-border);
+      background: var(--toolbar-menu-bg);
+    }
+    .drilldown-tab {
+      padding: 0.5rem 0.65rem;
+      border: none;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.15s, border-color 0.15s;
+      text-align: left;
+    }
+    .drilldown-tab:hover { opacity: 0.9; }
+    .drilldown-tab[aria-selected="true"] {
+      opacity: 1;
+      border-left-color: var(--frontend-stroke);
+    }
+    .drilldown-tab-content { display: none; }
+    .drilldown-tab-content[aria-hidden="false"] { display: block; }
     .drilldown-detail-body { padding: 0.7rem 0.75rem; display: grid; gap: 0.7rem; }
     .drilldown-section > h4 {
       margin: 0 0 0.3rem;
@@ -4980,13 +5025,79 @@
       font-size: 0.72rem;
     }
     .drilldown-member + .drilldown-member { margin-top: 0.2rem; }
+    .drilldown-member-header {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      width: 100%;
+    }
+    .drilldown-member-header:hover { opacity: 0.8; }
     .drilldown-member-name {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-weight: 600;
       overflow-wrap: anywhere;
     }
+    .drilldown-member-toggle {
+      margin-left: auto;
+      font-size: 0.6rem;
+      transition: transform 0.15s;
+    }
+    .drilldown-member[aria-expanded="true"] .drilldown-member-toggle {
+      transform: rotate(90deg);
+    }
+    .drilldown-member-body {
+      grid-column: 1 / -1;
+      margin-top: 0.3rem;
+      padding-top: 0.3rem;
+      border-top: 1px solid color-mix(in srgb, var(--toolbar-border) 60%, transparent);
+    }
+    .drilldown-member-body[hidden] { display: none; }
+    .drilldown-member-type {
+      font-size: 0.6rem;
+      opacity: 0.6;
+      margin-left: auto;
+      margin-right: 0.5rem;
+    }
     .drilldown-member-meta { opacity: 0.8; overflow-wrap: anywhere; }
     .drilldown-member-doc { grid-column: 1 / -1; opacity: 0.7; }
+    .drilldown-member-subhead {
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 0.2rem;
+    }
+    .drilldown-io {
+      grid-column: 1 / -1;
+      margin-top: 0.25rem;
+      padding: 0.3rem 0.45rem;
+      background: color-mix(in srgb, var(--frontend-stroke) 8%, transparent);
+      border-left: 2px solid var(--frontend-stroke);
+      border-radius: 0.25rem;
+    }
+    .drilldown-io-label {
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 0.2rem;
+    }
+    .drilldown-io code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.7rem;
+      overflow-wrap: anywhere;
+    }
     .drilldown-code {
       margin: 0;
       padding: 0.7rem 0.75rem;
@@ -5018,7 +5129,7 @@
       opacity: 0.75;
     }
     @media print {
-      .drilldown-bar, .drilldown-detail { display: none !important; }
+      .drilldown-bar, .drilldown-detail, #node-detail-panel { display: none !important; }
     }
   </style>
 </head>
@@ -5336,6 +5447,7 @@
         <span class="drilldown-meta" id="drilldown-meta"></span>
       </div>
       <section class="drilldown-detail no-print" id="drilldown-detail" hidden aria-labelledby="drilldown-detail-title"></section>
+      <aside id="node-detail-panel" class="no-print" hidden aria-labelledby="node-detail-panel-title"></aside>
       <p class="intent-trace-status no-print" id="intent-trace-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <div class="share-chapter-cue no-print" id="share-chapter-cue" hidden role="status" aria-live="polite">
         <div class="share-chapter-index">
@@ -13089,6 +13201,7 @@
       var trail = document.getElementById('drilldown-trail');
       var meta = document.getElementById('drilldown-meta');
       var detailPanel = document.getElementById('drilldown-detail');
+      var nodeDetailPanel = document.getElementById('node-detail-panel');
       if (!container || !hostSvg || !bar || !detailPanel) {
         return { active: function () { return false; }, root: function () {}, reset: function () {} };
       }
@@ -13464,26 +13577,41 @@
 
       // --- detail panel ----------------------------------------------------
 
-      function members(list, labelKey) {
+      function members(list, labelKey, expandable, labelOverride) {
         if (!list || !list.length) return '';
-        var rows = list.map(function (member) {
+        var label = labelOverride || text(labelKey);
+        var rows = list.map(function (member, index) {
           var head = member.signature || member.name;
-          var sideBits = [];
-          if (member.type) sideBits.push(member.type);
-          if (member.value) sideBits.push(member.value);
-          var out = ['<div class="drilldown-member">'];
+          var hasIO = member.type || member.value;
+          var hasDetails = (head && head !== member.name) || member.doc || member.code || hasIO;
+          var out = ['<div class="drilldown-member' + (expandable && hasDetails ? ' drilldown-member-expandable' : '') + '" data-member-index="' + index + '" aria-expanded="false">'];
+          out.push('<button class="drilldown-member-header" type="button" aria-expanded="false">');
           out.push('<span class="drilldown-member-name">' + escapeText(member.name) + '</span>');
-          out.push('<span class="drilldown-member-meta">' + escapeText(sideBits.join(' · ')) + '</span>');
+          if (member.type) {
+            out.push('<span class="drilldown-member-type">' + escapeText(member.type) + '</span>');
+          }
+          if (expandable && hasDetails) {
+            out.push('<span class="drilldown-member-toggle" aria-hidden="true">▶</span>');
+          }
+          out.push('</button>');
+          out.push('<div class="drilldown-member-body" hidden>');
           if (head && head !== member.name) {
-            out.push('<span class="drilldown-member-doc">' + escapeText(head) + '</span>');
+            out.push('<div class="drilldown-member-doc"><span class="drilldown-member-subhead">' + escapeText(text('viewer.drilldown.signature')) + '</span><pre class="drilldown-code">' + escapeText(head) + '</pre></div>');
           }
           if (member.doc) {
-            out.push('<span class="drilldown-member-doc">' + escapeText(member.doc) + '</span>');
+            out.push('<div class="drilldown-member-doc">' + escapeText(member.doc) + '</div>');
           }
+          if (member.value) {
+            out.push('<div class="drilldown-io"><span class="drilldown-io-label">' + escapeText(text('viewer.drilldown.io.flow')) + '</span><code>' + escapeText(member.value) + '</code></div>');
+          }
+          if (member.code) {
+            out.push('<pre class="drilldown-code">' + escapeText(member.code) + '</pre>');
+          }
+          out.push('</div>');
           out.push('</div>');
           return out.join('');
         }).join('');
-        return '<div class="drilldown-section"><h4>' + escapeText(text(labelKey)) + '</h4>' + rows + '</div>';
+        return '<div class="drilldown-section"><h4>' + escapeText(label) + '</h4>' + rows + '</div>';
       }
 
       function sourcesMarkup(sources) {
@@ -13509,7 +13637,36 @@
         parts.push('<div class="drilldown-detail-head">');
         parts.push('<strong class="drilldown-detail-title" id="drilldown-detail-title">' + escapeText(detail.title) + '</strong>');
         if (detail.symbol) parts.push('<code class="drilldown-detail-symbol">' + escapeText(detail.symbol) + '</code>');
-        parts.push('</div><div class="drilldown-detail-body">');
+        parts.push('</div>');
+
+        // Tab bar
+        parts.push('<div class="drilldown-detail-tabs" role="tablist">');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="true" aria-controls="tab-input" id="tab-input-btn">输入</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-output" id="tab-output-btn">输出</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-summary" id="tab-summary-btn">简要</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-detail" id="tab-detail-btn">详细</button>');
+        parts.push('</div>');
+
+        parts.push('<div class="drilldown-detail-body">');
+
+        // Input tab = fields
+        parts.push('<div class="drilldown-tab-content" id="tab-input" role="tabpanel" aria-labelledby="tab-input-btn" aria-hidden="false">');
+        parts.push(members(detail.fields, 'viewer.drilldown.fields', true, '字段'));
+        if (!detail.fields || detail.fields.length === 0) {
+          parts.push('<div class="drilldown-section"><em>该节点没有字段</em></div>');
+        }
+        parts.push('</div>');
+
+        // Output tab = methods
+        parts.push('<div class="drilldown-tab-content" id="tab-output" role="tabpanel" aria-labelledby="tab-output-btn" aria-hidden="true">');
+        parts.push(members(detail.methods, 'viewer.drilldown.methods', true, '方法'));
+        if (!detail.methods || detail.methods.length === 0) {
+          parts.push('<div class="drilldown-section"><em>该节点没有方法</em></div>');
+        }
+        parts.push('</div>');
+
+        // Summary tab - subtitle, sources, notes
+        parts.push('<div class="drilldown-tab-content" id="tab-summary" role="tabpanel" aria-labelledby="tab-summary-btn" aria-hidden="true">');
         if (detail.subtitle) parts.push('<div class="drilldown-section">' + escapeText(detail.subtitle) + '</div>');
         if (detail.signature) {
           parts.push('<div class="drilldown-section"><h4>' + escapeText(text('viewer.drilldown.signature')) +
@@ -13520,15 +13677,25 @@
             '</h4><div>' + escapeText(detail.doc) + '</div></div>');
         }
         parts.push(sourcesMarkup(detail.sources));
-        parts.push(members(detail.fields, 'viewer.drilldown.fields'));
-        parts.push(members(detail.methods, 'viewer.drilldown.methods'));
-        parts.push(codeMarkup(detail.code));
         if (detail.notes && detail.notes.length) {
           parts.push('<div class="drilldown-section"><h4>' + escapeText(text('viewer.drilldown.notes')) +
             '</h4><ul class="drilldown-notes">' +
             detail.notes.map(function (note) { return '<li>' + escapeText(note) + '</li>'; }).join('') +
             '</ul></div>');
         }
+        if (!detail.subtitle && !detail.signature && !detail.doc && !detail.sources && !detail.notes) {
+          parts.push('<div class="drilldown-section"><em>该节点没有摘要信息</em></div>');
+        }
+        parts.push('</div>');
+
+        // Detail tab - full code
+        parts.push('<div class="drilldown-tab-content" id="tab-detail" role="tabpanel" aria-labelledby="tab-detail-btn" aria-hidden="true">');
+        parts.push(codeMarkup(detail.code));
+        if (!detail.code) {
+          parts.push('<div class="drilldown-section"><em>该节点没有代码实现</em></div>');
+        }
+        parts.push('</div>');
+
         parts.push('</div>');
         return parts.join('');
       }
@@ -13558,6 +13725,91 @@
           ? renderCodeDetail(payload)
           : renderDiagramDetail(payload);
         detailPanel.hidden = false;
+
+        // Attach tab click handlers for code detail
+        if (payload.kind === 'code') {
+          var tabs = detailPanel.querySelectorAll('.drilldown-tab');
+          var tabContents = detailPanel.querySelectorAll('.drilldown-tab-content');
+          tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+              var targetId = tab.getAttribute('aria-controls');
+              tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', 'false');
+              });
+              tab.setAttribute('aria-selected', 'true');
+              tabContents.forEach(function (content) {
+                content.setAttribute('aria-hidden', 'true');
+              });
+              var targetContent = detailPanel.querySelector('#' + targetId);
+              if (targetContent) {
+                targetContent.setAttribute('aria-hidden', 'false');
+              }
+            });
+          });
+
+          // Attach expandable member click handlers
+          var expandableMembers = detailPanel.querySelectorAll('.drilldown-member-expandable');
+          expandableMembers.forEach(function (member) {
+            var header = member.querySelector('.drilldown-member-header');
+            var body = member.querySelector('.drilldown-member-body');
+            var toggle = member.querySelector('.drilldown-member-toggle');
+            if (header && body && toggle) {
+              header.addEventListener('click', function () {
+                var isExpanded = member.getAttribute('aria-expanded') === 'true';
+                member.setAttribute('aria-expanded', String(!isExpanded));
+                header.setAttribute('aria-expanded', String(!isExpanded));
+                body.hidden = isExpanded;
+              });
+            }
+          });
+        }
+      }
+
+      function showNodeDetail(id) {
+        var payload = payloadFor(id);
+        if (!payload) { nodeDetailPanel.hidden = true; nodeDetailPanel.innerHTML = ''; return; }
+        nodeDetailPanel.innerHTML = payload.kind === 'code'
+          ? renderCodeDetail(payload)
+          : renderDiagramDetail(payload);
+        nodeDetailPanel.hidden = false;
+
+        // Attach tab click handlers for code detail
+        if (payload.kind === 'code') {
+          var tabs = nodeDetailPanel.querySelectorAll('.drilldown-tab');
+          var tabContents = nodeDetailPanel.querySelectorAll('.drilldown-tab-content');
+          tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+              var targetId = tab.getAttribute('aria-controls');
+              tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', 'false');
+              });
+              tab.setAttribute('aria-selected', 'true');
+              tabContents.forEach(function (content) {
+                content.setAttribute('aria-hidden', 'true');
+              });
+              var targetContent = nodeDetailPanel.querySelector('#' + targetId);
+              if (targetContent) {
+                targetContent.setAttribute('aria-hidden', 'false');
+              }
+            });
+          });
+
+          // Attach expandable member click handlers
+          var expandableMembers = nodeDetailPanel.querySelectorAll('.drilldown-member-expandable');
+          expandableMembers.forEach(function (member) {
+            var header = member.querySelector('.drilldown-member-header');
+            var body = member.querySelector('.drilldown-member-body');
+            var toggle = member.querySelector('.drilldown-member-toggle');
+            if (header && body && toggle) {
+              header.addEventListener('click', function () {
+                var isExpanded = member.getAttribute('aria-expanded') === 'true';
+                member.setAttribute('aria-expanded', String(!isExpanded));
+                header.setAttribute('aria-expanded', String(!isExpanded));
+                body.hidden = isExpanded;
+              });
+            }
+          });
+        }
       }
 
       // --- navigation ------------------------------------------------------
@@ -13723,14 +13975,13 @@
       container.addEventListener('click', function (event) {
         var node = event.target.closest('[data-node-id]');
         if (!node) return;
-        if (event.target.closest('.drilldown-detail')) return;
+        if (event.target.closest('.drilldown-detail') || event.target.closest('#node-detail-panel')) return;
         var id = node.getAttribute('data-node-id');
         var now = Date.now();
         // Detect a real double-click from two rapid clicks on the same node.
         // Headless Chrome doesn't always synthesize a `dblclick` DOM event from
-        // `clickCount: 2` mouse events, so descend here as well as in the
-        // `dblclick` handler. `lastDescendAt` guards against descending twice
-        // if both handlers fire.
+        // `clickCount: 2` mouse events, so descend here as well in the
+        // `dblclick` handler. `lastDescendAt` guards against descending twice.
         if (lastClickId === id && now - lastClickAt < 400) {
           if (payloadFor(id) && now - lastDescendAt > 400) {
             lastDescendAt = now;
@@ -13742,7 +13993,7 @@
         }
         lastClickAt = now;
         lastClickId = id;
-        showDetail(id);
+        showNodeDetail(id);
       }, true);
 
       container.addEventListener('dblclick', function (event) {

@@ -4,6 +4,10 @@
   "meta": {
     "title": "toolsclaw — Ultra-lightweight tool-calling agent framework",
     "quality_profile": "showcase",
+    "locale": "zh-CN",
+    "legend": {
+      "mode": "hidden"
+    },
     "viewBox": [
       1330,
       840
@@ -64,21 +68,29 @@
           {
             "name": "init",
             "signature": "def init(workspace: str = typer.Option(\"\"))",
-            "doc": "Create config + workspace."
+            "doc": "Create config + workspace.",
+            "type": "Typer command",
+            "value": "→ None"
           },
           {
             "name": "run",
             "signature": "def run(message: str, ...)",
-            "doc": "One-shot agent run."
+            "doc": "One-shot agent run.",
+            "type": "Typer command",
+            "value": "message: str → AgentResult"
           },
           {
             "name": "chat",
             "signature": "def chat(...)",
-            "doc": "Interactive REPL."
+            "doc": "Interactive REPL.",
+            "type": "Typer command",
+            "value": "→ InteractiveSession"
           },
           {
             "name": "memory_add / memory_search / memory_link_graph / ...",
-            "doc": "Ten memory management commands over MemoryStore."
+            "doc": "Ten memory management commands over MemoryStore.",
+            "type": "Memory commands",
+            "value": "name: str → MemoryEntry"
           }
         ],
         "notes": [
@@ -114,22 +126,30 @@
           {
             "name": "from_config",
             "signature": "@classmethod def from_config(cls, config_path=None, *, workspace=None, skills_dir=None, model=None, api_key=None)",
-            "doc": "Builds a runner from config plus overrides."
+            "doc": "Builds a runner from config plus overrides.",
+            "type": "classmethod",
+            "value": "config_path?, workspace?, skills_dir?, model?, api_key? → ToolsClaw"
           },
           {
             "name": "from_runner",
             "signature": "@classmethod def from_runner(cls, runner: AgentRunner)",
-            "doc": "Wraps an existing runner."
+            "doc": "Wraps an existing runner.",
+            "type": "classmethod",
+            "value": "runner: AgentRunner → ToolsClaw"
           },
           {
             "name": "run",
             "signature": "async def run(self, message: str, ...) -> RunResult",
-            "doc": "Runs one message, returning content plus usage and memory counters."
+            "doc": "Runs one message, returning content plus usage and memory counters.",
+            "type": "async method",
+            "value": "message: str → RunResult"
           },
           {
             "name": "stream_run",
             "signature": "async def stream_run(self, message: str, ...)",
-            "doc": "Streaming variant."
+            "doc": "Streaming variant.",
+            "type": "async method",
+            "value": "message: str → AsyncIterator[str]"
           }
         ],
         "notes": [
@@ -1754,10 +1774,12 @@
         "fields": [
           {
             "name": "Skill.name / .description / .always",
+            "type": "str / str / bool",
             "doc": "From SKILL.md frontmatter."
           },
           {
             "name": "Skill.content",
+            "type": "str",
             "doc": "Body without frontmatter."
           },
           {
@@ -1775,16 +1797,22 @@
           {
             "name": "venv_dir",
             "signature": "@property def venv_dir(self) -> Path",
-            "doc": "Per-skill venv beside SKILL.md."
+            "doc": "Per-skill venv beside SKILL.md.",
+            "type": "property",
+            "value": "self → Path"
           },
           {
             "name": "get_python",
             "signature": "def get_python(self) -> str",
-            "doc": "venv interpreter, or sys.executable."
+            "doc": "venv interpreter, or sys.executable.",
+            "type": "method",
+            "value": "self → str"
           },
           {
             "name": "load_skills / build_skills_summary / get_always_skills / ensure_skill_deps",
-            "doc": "Module-level helpers used by AgentRunner."
+            "doc": "Module-level helpers used by AgentRunner.",
+            "type": "helpers",
+            "value": "workspace/skills → list[Skill] / str / None"
           }
         ],
         "sources": [

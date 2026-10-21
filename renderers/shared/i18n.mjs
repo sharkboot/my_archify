@@ -570,6 +570,7 @@ const MESSAGE_PAIRS = {
   'viewer.drilldown.connectors': ['Relationships', '关系'],
   'viewer.drilldown.copyCode': ['Copy code', '复制代码'],
   'viewer.drilldown.codeCopied': ['Code copied', '代码已复制'],
+  'viewer.drilldown.io.flow': ['I/O', '入参 / 出参'],
 };
 
 for (const [key, messages] of Object.entries(MESSAGE_PAIRS)) {

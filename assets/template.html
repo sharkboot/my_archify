@@ -4924,7 +4924,7 @@
       margin: 0.75rem 0 0;
       border: 1px solid var(--toolbar-border);
       border-radius: 0.85rem;
-      background: var(--toolbar-menu-bg);
+      background: transparent;
       color: var(--toolbar-text);
       overflow: hidden;
     }
@@ -4948,12 +4948,67 @@
       transform-origin: left center;
     }
     html[data-preset="blueprint"] .drilldown-detail { border-radius: 0.3rem; }
+    /* Node detail panel for main diagram nodes - shared right panel */
+    #node-detail-panel {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 560px;
+      max-height: 100vh;
+      overflow-y: auto;
+      z-index: 55;
+      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
+      border: 1px solid var(--toolbar-border);
+      border-radius: 0.85rem;
+      background: transparent;
+      color: var(--toolbar-text);
+    }
+    #node-detail-panel[hidden] { display: none; }
+    html[data-preset="blueprint"] #node-detail-panel { border-radius: 0.3rem; }
+    /* UI-007: on narrow viewports a 560px fixed panel overflows the screen and
+       the horizontal canvas scroll shifts it against the diagram. Cap it to the
+       viewport, inset it, and give it its own scroll area so content stays
+       reachable while the canvas scrolls underneath. */
+    @media (max-width: 640px) {
+      #drilldown-detail:not([hidden]),
+      #node-detail-panel {
+        width: auto;
+        left: 0;
+        right: 0;
+        top: auto;
+        bottom: 0;
+        max-height: 62vh;
+        max-height: 62dvh;
+        border-radius: 0.85rem 0.85rem 0 0;
+        border-left: 0;
+        border-right: 0;
+        border-bottom: 0;
+      }
+      #drilldown-detail:not([hidden]) ~ .diagram-container,
+      #drilldown-detail:not([hidden]) + .diagram-container {
+        transform: none;
+      }
+    }
     .drilldown-detail-head {
       display: flex;
       align-items: baseline;
       gap: 0.5rem;
       padding: 0.6rem 0.75rem;
       border-bottom: 1px solid var(--toolbar-border);
+      /* UI-002: the header is the drag handle for both detail panels. */
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #drilldown-detail[data-panel-dragging] .drilldown-detail-head,
+    #node-detail-panel[data-panel-dragging] .drilldown-detail-head {
+      cursor: grabbing;
+    }
+    #drilldown-detail[data-panel-dragging],
+    #node-detail-panel[data-panel-dragging] {
+      user-select: none;
+      -webkit-user-select: none;
     }
     .drilldown-detail-title { font-size: 0.86rem; font-weight: 650; }
     .drilldown-detail-symbol {
@@ -4962,7 +5017,35 @@
       opacity: 0.72;
       overflow-wrap: anywhere;
     }
-    .drilldown-detail-body { padding: 0.7rem 0.75rem; display: grid; gap: 0.7rem; }
+    .drilldown-detail-tabs {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--toolbar-border);
+      background: var(--toolbar-menu-bg);
+    }
+    .drilldown-tab {
+      padding: 0.5rem 0.65rem;
+      border: none;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.15s, border-color 0.15s;
+      text-align: left;
+    }
+    .drilldown-tab:hover { opacity: 0.9; }
+    .drilldown-tab[aria-selected="true"] {
+      opacity: 1;
+      border-left-color: var(--frontend-stroke);
+    }
+    .drilldown-tab-content { display: none; }
+    .drilldown-tab-content[aria-hidden="false"] { display: block; }
+    .drilldown-detail-body { padding: 0.7rem 0.75rem; display: grid; gap: 0.7rem; background: transparent; }
     .drilldown-section > h4 {
       margin: 0 0 0.3rem;
       font-size: 0.68rem;
@@ -4980,13 +5063,79 @@
       font-size: 0.72rem;
     }
     .drilldown-member + .drilldown-member { margin-top: 0.2rem; }
+    .drilldown-member-header {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      width: 100%;
+    }
+    .drilldown-member-header:hover { opacity: 0.8; }
     .drilldown-member-name {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-weight: 600;
       overflow-wrap: anywhere;
     }
+    .drilldown-member-toggle {
+      margin-left: auto;
+      font-size: 0.6rem;
+      transition: transform 0.15s;
+    }
+    .drilldown-member[aria-expanded="true"] .drilldown-member-toggle {
+      transform: rotate(90deg);
+    }
+    .drilldown-member-body {
+      grid-column: 1 / -1;
+      margin-top: 0.3rem;
+      padding-top: 0.3rem;
+      border-top: 1px solid color-mix(in srgb, var(--toolbar-border) 60%, transparent);
+    }
+    .drilldown-member-body[hidden] { display: none; }
+    .drilldown-member-type {
+      font-size: 0.6rem;
+      opacity: 0.6;
+      margin-left: auto;
+      margin-right: 0.5rem;
+    }
     .drilldown-member-meta { opacity: 0.8; overflow-wrap: anywhere; }
     .drilldown-member-doc { grid-column: 1 / -1; opacity: 0.7; }
+    .drilldown-member-subhead {
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 0.2rem;
+    }
+    .drilldown-io {
+      grid-column: 1 / -1;
+      margin-top: 0.25rem;
+      padding: 0.3rem 0.45rem;
+      background: color-mix(in srgb, var(--frontend-stroke) 8%, transparent);
+      border-left: 2px solid var(--frontend-stroke);
+      border-radius: 0.25rem;
+    }
+    .drilldown-io-label {
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 0.2rem;
+    }
+    .drilldown-io code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.7rem;
+      overflow-wrap: anywhere;
+    }
     .drilldown-code {
       margin: 0;
       padding: 0.7rem 0.75rem;
@@ -5018,7 +5167,7 @@
       opacity: 0.75;
     }
     @media print {
-      .drilldown-bar, .drilldown-detail { display: none !important; }
+      .drilldown-bar, .drilldown-detail, #node-detail-panel { display: none !important; }
     }
   </style>
 </head>
@@ -5336,6 +5485,7 @@
         <span class="drilldown-meta" id="drilldown-meta"></span>
       </div>
       <section class="drilldown-detail no-print" id="drilldown-detail" hidden aria-labelledby="drilldown-detail-title"></section>
+      <aside id="node-detail-panel" class="no-print" hidden aria-labelledby="node-detail-panel-title"></aside>
       <p class="intent-trace-status no-print" id="intent-trace-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <div class="share-chapter-cue no-print" id="share-chapter-cue" hidden role="status" aria-live="polite">
         <div class="share-chapter-index">
@@ -5572,6 +5722,91 @@
       catch (_) { return { locale: 'en', messages: {} }; }
     })();
     Archify.locale = archifyI18nData.locale || 'en';
+
+    // UI-003: true when the event target is a control that owns its own keys,
+    // so the page-wide shortcut handler must leave the event alone.
+    function interactiveKeyOwner(target) {
+      if (!target || target.nodeType !== 1) return false;
+      if (target.isContentEditable) return true;
+      var tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'OPTION') return true;
+      if (tag === 'BUTTON' || tag === 'A') return true;
+      if (target.closest && target.closest('[contenteditable=""], [contenteditable="true"], [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="textbox"], [role="searchbox"], [role="slider"], [role="spinbutton"]')) return true;
+      return false;
+    }
+
+    // UI-004: a single Escape ladder. Every listener that could consume Escape
+    // resolves through here so one press performs exactly one action, from the
+    // topmost transient layer downwards.
+    // Returns true when it consumed the event.
+    Archify.escapeLadder = function (event) {
+      var steps = [
+        // 1. Transient overlays / popovers first.
+        function () { return closeIfOpen(Archify.preset, 'close', [true], event); },
+        function () { return closeIfOpen(Archify.exportMenu, 'close', [], event); },
+        function () { return closeIfOpen(Archify.guide, 'close', [{ restoreFocus: true }], event); },
+        // 2. Detail panels.
+        function () { return closeDetailPanels(event); },
+        // 3. Descend stack.
+        function () { return Archify.drilldown && Archify.drilldown.active() && stepBack(event); },
+        // 4. Global view state.
+        function () { return closeIfOpen(Archify.semanticLens, 'close', [{ restoreFocus: true }], event); },
+        function () { return closeIfOpen(Archify.radar, 'close', [{ restoreFocus: true }], event); },
+        function () { return clearIfActive(Archify.routeProbe, 'escape', [{ restoreFocus: true }], event); },
+        function () { return clearIfActive(Archify.intentTrace, 'clear', [], event); },
+        function () { return clearIfActive(Archify.focus, 'clear', [{ restoreFocus: true }], event); },
+        // 5. Presentation last.
+        function () { return exitIfActive(Archify.presentation, event); }
+      ];
+      for (var i = 0; i < steps.length; i++) {
+        if (steps[i]()) return true;
+      }
+      return false;
+    };
+
+    function consumeEscape(event) {
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+    }
+
+    function closeIfOpen(module, method, args, event) {
+      if (!module || typeof module.isOpen !== 'function' || !module.isOpen()) return false;
+      if (typeof module[method] !== 'function') return false;
+      consumeEscape(event);
+      module[method].apply(module, args);
+      return true;
+    }
+
+    function clearIfActive(module, method, args, event) {
+      if (!module || typeof module.active !== 'function' || !module.active()) return false;
+      if (typeof module[method] !== 'function') return false;
+      consumeEscape(event);
+      module[method].apply(module, args);
+      return true;
+    }
+
+    function exitIfActive(presentation, event) {
+      if (!presentation || typeof presentation.active !== 'function' || !presentation.active()) return false;
+      consumeEscape(event);
+      presentation.exit();
+      return true;
+    }
+
+    function closeDetailPanels(event) {
+      if (typeof Archify.closeDetailPanels === 'function' && Archify.closeDetailPanels()) {
+        consumeEscape(event);
+        return true;
+      }
+      return false;
+    }
+
+    function stepBack(event) {
+      if (typeof Archify.drilldown.goBack !== 'function') return false;
+      consumeEscape(event);
+      Archify.drilldown.goBack();
+      return true;
+    }
+
 
     function viewerText(key, values) {
       var messages = archifyI18nData.messages || {};
@@ -8850,15 +9085,24 @@
         var value = location.href.replace(/#.*$/, '') + (relationId
           ? '#relation=' + encodeURIComponent(relationId)
           : '#focus=' + encodeURIComponent(activeIds[0]) + (reachabilityMode ? '&reach=' + reachabilityMode : ''));
+        // UI-005: every failure path must resolve to `false`, never reject and
+        // never report success. Without the trailing catch a rejected fallback
+        // would leave the button reading "Copied" while nothing was copied.
         var copy = navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
           ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopy(value); })
           : Promise.resolve(fallbackCopy(value));
         return copy.then(function (copied) {
+          return copied === true;
+        }).catch(function () {
+          return false;
+        }).then(function (copied) {
           copyBtn.textContent = viewerText(copied ? 'viewer.common.copied' : 'viewer.common.copyFailed');
+          copyBtn.setAttribute('data-copy-state', copied ? 'copied' : 'failed');
           copyBtn.setAttribute('aria-label', copied
             ? viewerText(relationId ? 'viewer.passport.copy.pinned.success' : 'viewer.passport.copy.focused.success')
             : viewerText(relationId ? 'viewer.passport.copy.pinned.failed' : 'viewer.passport.copy.focused.failed'));
           window.setTimeout(function () {
+            copyBtn.removeAttribute('data-copy-state');
             renderRelationshipCopyAction();
           }, 1600);
           return copied;
@@ -10051,10 +10295,16 @@
         if (playing) pausePlayback();
         var value = storyMomentLink();
         if (!value) return Promise.resolve(false);
+        // UI-005: failure resolves to false so the beat link can show a real
+        // failure state instead of a stale or premature success.
         var copy = navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
           ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopyStoryMoment(value); })
           : Promise.resolve(fallbackCopyStoryMoment(value));
         return copy.then(function (copied) {
+          return copied === true;
+        }).catch(function () {
+          return false;
+        }).then(function (copied) {
           setBeatLinkFeedback(copied);
           return copied;
         });
@@ -13089,6 +13339,7 @@
       var trail = document.getElementById('drilldown-trail');
       var meta = document.getElementById('drilldown-meta');
       var detailPanel = document.getElementById('drilldown-detail');
+      var nodeDetailPanel = document.getElementById('node-detail-panel');
       if (!container || !hostSvg || !bar || !detailPanel) {
         return { active: function () { return false; }, root: function () {}, reset: function () {} };
       }
@@ -13116,8 +13367,14 @@
       }
       var rootInnerMarkup = hostSvg.innerHTML;
       var stack = [{ kind: 'root', id: null, title: null }];
-      var lastClickAt = 0;
-      var lastClickId = null;
+      // UI-006: the previous click-timing scheme opened the detail panel
+      // immediately and then un-did it when a second click arrived, which is
+      // what made the panel flash and sometimes descend by accident. A single
+      // pending timer now decides: a second click inside the window cancels the
+      // open and descends, one click alone opens the detail panel.
+      var DOUBLE_CLICK_MS = 400;
+      var pendingClickTimer = 0;
+      var pendingClickId = null;
       var lastDescendAt = 0;
 
       function text(key, values) {
@@ -13464,26 +13721,41 @@
 
       // --- detail panel ----------------------------------------------------
 
-      function members(list, labelKey) {
+      function members(list, labelKey, expandable, labelOverride) {
         if (!list || !list.length) return '';
-        var rows = list.map(function (member) {
+        var label = labelOverride || text(labelKey);
+        var rows = list.map(function (member, index) {
           var head = member.signature || member.name;
-          var sideBits = [];
-          if (member.type) sideBits.push(member.type);
-          if (member.value) sideBits.push(member.value);
-          var out = ['<div class="drilldown-member">'];
+          var hasIO = member.type || member.value;
+          var hasDetails = (head && head !== member.name) || member.doc || member.code || hasIO;
+          var out = ['<div class="drilldown-member' + (expandable && hasDetails ? ' drilldown-member-expandable' : '') + '" data-member-index="' + index + '" aria-expanded="false">'];
+          out.push('<button class="drilldown-member-header" type="button" aria-expanded="false">');
           out.push('<span class="drilldown-member-name">' + escapeText(member.name) + '</span>');
-          out.push('<span class="drilldown-member-meta">' + escapeText(sideBits.join(' · ')) + '</span>');
+          if (member.type) {
+            out.push('<span class="drilldown-member-type">' + escapeText(member.type) + '</span>');
+          }
+          if (expandable && hasDetails) {
+            out.push('<span class="drilldown-member-toggle" aria-hidden="true">▶</span>');
+          }
+          out.push('</button>');
+          out.push('<div class="drilldown-member-body" hidden>');
           if (head && head !== member.name) {
-            out.push('<span class="drilldown-member-doc">' + escapeText(head) + '</span>');
+            out.push('<div class="drilldown-member-doc"><span class="drilldown-member-subhead">' + escapeText(text('viewer.drilldown.signature')) + '</span><pre class="drilldown-code">' + escapeText(head) + '</pre></div>');
           }
           if (member.doc) {
-            out.push('<span class="drilldown-member-doc">' + escapeText(member.doc) + '</span>');
+            out.push('<div class="drilldown-member-doc">' + escapeText(member.doc) + '</div>');
           }
+          if (member.value) {
+            out.push('<div class="drilldown-io"><span class="drilldown-io-label">' + escapeText(text('viewer.drilldown.io.flow')) + '</span><code>' + escapeText(member.value) + '</code></div>');
+          }
+          if (member.code) {
+            out.push('<pre class="drilldown-code">' + escapeText(member.code) + '</pre>');
+          }
+          out.push('</div>');
           out.push('</div>');
           return out.join('');
         }).join('');
-        return '<div class="drilldown-section"><h4>' + escapeText(text(labelKey)) + '</h4>' + rows + '</div>';
+        return '<div class="drilldown-section"><h4>' + escapeText(label) + '</h4>' + rows + '</div>';
       }
 
       function sourcesMarkup(sources) {
@@ -13509,7 +13781,36 @@
         parts.push('<div class="drilldown-detail-head">');
         parts.push('<strong class="drilldown-detail-title" id="drilldown-detail-title">' + escapeText(detail.title) + '</strong>');
         if (detail.symbol) parts.push('<code class="drilldown-detail-symbol">' + escapeText(detail.symbol) + '</code>');
-        parts.push('</div><div class="drilldown-detail-body">');
+        parts.push('</div>');
+
+        // Tab bar
+        parts.push('<div class="drilldown-detail-tabs" role="tablist">');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="true" aria-controls="tab-input" id="tab-input-btn">输入</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-output" id="tab-output-btn">输出</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-summary" id="tab-summary-btn">简要</button>');
+        parts.push('<button class="drilldown-tab" role="tab" aria-selected="false" aria-controls="tab-detail" id="tab-detail-btn">详细</button>');
+        parts.push('</div>');
+
+        parts.push('<div class="drilldown-detail-body">');
+
+        // Input tab = fields
+        parts.push('<div class="drilldown-tab-content" id="tab-input" role="tabpanel" aria-labelledby="tab-input-btn" aria-hidden="false">');
+        parts.push(members(detail.fields, 'viewer.drilldown.fields', true, '字段'));
+        if (!detail.fields || detail.fields.length === 0) {
+          parts.push('<div class="drilldown-section"><em>该节点没有字段</em></div>');
+        }
+        parts.push('</div>');
+
+        // Output tab = methods
+        parts.push('<div class="drilldown-tab-content" id="tab-output" role="tabpanel" aria-labelledby="tab-output-btn" aria-hidden="true">');
+        parts.push(members(detail.methods, 'viewer.drilldown.methods', true, '方法'));
+        if (!detail.methods || detail.methods.length === 0) {
+          parts.push('<div class="drilldown-section"><em>该节点没有方法</em></div>');
+        }
+        parts.push('</div>');
+
+        // Summary tab - subtitle, sources, notes
+        parts.push('<div class="drilldown-tab-content" id="tab-summary" role="tabpanel" aria-labelledby="tab-summary-btn" aria-hidden="true">');
         if (detail.subtitle) parts.push('<div class="drilldown-section">' + escapeText(detail.subtitle) + '</div>');
         if (detail.signature) {
           parts.push('<div class="drilldown-section"><h4>' + escapeText(text('viewer.drilldown.signature')) +
@@ -13520,15 +13821,25 @@
             '</h4><div>' + escapeText(detail.doc) + '</div></div>');
         }
         parts.push(sourcesMarkup(detail.sources));
-        parts.push(members(detail.fields, 'viewer.drilldown.fields'));
-        parts.push(members(detail.methods, 'viewer.drilldown.methods'));
-        parts.push(codeMarkup(detail.code));
         if (detail.notes && detail.notes.length) {
           parts.push('<div class="drilldown-section"><h4>' + escapeText(text('viewer.drilldown.notes')) +
             '</h4><ul class="drilldown-notes">' +
             detail.notes.map(function (note) { return '<li>' + escapeText(note) + '</li>'; }).join('') +
             '</ul></div>');
         }
+        if (!detail.subtitle && !detail.signature && !detail.doc && !detail.sources && !detail.notes) {
+          parts.push('<div class="drilldown-section"><em>该节点没有摘要信息</em></div>');
+        }
+        parts.push('</div>');
+
+        // Detail tab - full code
+        parts.push('<div class="drilldown-tab-content" id="tab-detail" role="tabpanel" aria-labelledby="tab-detail-btn" aria-hidden="true">');
+        parts.push(codeMarkup(detail.code));
+        if (!detail.code) {
+          parts.push('<div class="drilldown-section"><em>该节点没有代码实现</em></div>');
+        }
+        parts.push('</div>');
+
         parts.push('</div>');
         return parts.join('');
       }
@@ -13551,13 +13862,136 @@
         return parts.join('');
       }
 
+      // --- mutually exclusive detail panels (UI-001) -------------------------
+      // The drill-down panel and the node panel share the same fixed top-right
+      // slot, so at most one may be open at a time. Every code path that opens
+      // or closes a panel goes through these helpers instead of touching
+      // `hidden`/`innerHTML` directly, which is what let both panels appear
+      // stacked before.
+      // UI-002: a panel the reader dragged keeps inline left/top, which would
+      // then pin the *next* node's detail to that spot. Clearing the inline
+      // position on close returns every panel to its authored slot.
+      function resetPanelPosition(panel) {
+        if (!panel || !panel.style) return;
+        panel.style.left = '';
+        panel.style.top = '';
+        panel.style.right = '';
+        panel.style.bottom = '';
+        panel.removeAttribute('data-panel-dragging');
+      }
+
+      function closeNodeDetail() {
+        if (!nodeDetailPanel) return;
+        nodeDetailPanel.hidden = true;
+        nodeDetailPanel.innerHTML = '';
+        resetPanelPosition(nodeDetailPanel);
+      }
+
+      function closeDrilldownDetail() {
+        if (!detailPanel) return;
+        detailPanel.hidden = true;
+        detailPanel.innerHTML = '';
+        resetPanelPosition(detailPanel);
+      }
+
       function showDetail(id) {
         var payload = payloadFor(id);
-        if (!payload) { detailPanel.hidden = true; detailPanel.innerHTML = ''; return; }
+        if (!payload) { closeDrilldownDetail(); return; }
+        // Opening the drill-down panel evicts the node panel.
+        closeNodeDetail();
+        resetPanelPosition(detailPanel);
         detailPanel.innerHTML = payload.kind === 'code'
           ? renderCodeDetail(payload)
           : renderDiagramDetail(payload);
         detailPanel.hidden = false;
+
+        // Attach tab click handlers for code detail
+        if (payload.kind === 'code') {
+          var tabs = detailPanel.querySelectorAll('.drilldown-tab');
+          var tabContents = detailPanel.querySelectorAll('.drilldown-tab-content');
+          tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+              var targetId = tab.getAttribute('aria-controls');
+              tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', 'false');
+              });
+              tab.setAttribute('aria-selected', 'true');
+              tabContents.forEach(function (content) {
+                content.setAttribute('aria-hidden', 'true');
+              });
+              var targetContent = detailPanel.querySelector('#' + targetId);
+              if (targetContent) {
+                targetContent.setAttribute('aria-hidden', 'false');
+              }
+            });
+          });
+
+          // Attach expandable member click handlers
+          var expandableMembers = detailPanel.querySelectorAll('.drilldown-member-expandable');
+          expandableMembers.forEach(function (member) {
+            var header = member.querySelector('.drilldown-member-header');
+            var body = member.querySelector('.drilldown-member-body');
+            var toggle = member.querySelector('.drilldown-member-toggle');
+            if (header && body && toggle) {
+              header.addEventListener('click', function () {
+                var isExpanded = member.getAttribute('aria-expanded') === 'true';
+                member.setAttribute('aria-expanded', String(!isExpanded));
+                header.setAttribute('aria-expanded', String(!isExpanded));
+                body.hidden = isExpanded;
+              });
+            }
+          });
+        }
+      }
+
+      function showNodeDetail(id) {
+        var payload = payloadFor(id);
+        if (!payload) { closeNodeDetail(); return; }
+        // Opening the node panel evicts the drill-down panel.
+        closeDrilldownDetail();
+        resetPanelPosition(nodeDetailPanel);
+        nodeDetailPanel.innerHTML = payload.kind === 'code'
+          ? renderCodeDetail(payload)
+          : renderDiagramDetail(payload);
+        nodeDetailPanel.hidden = false;
+
+        // Attach tab click handlers for code detail
+        if (payload.kind === 'code') {
+          var tabs = nodeDetailPanel.querySelectorAll('.drilldown-tab');
+          var tabContents = nodeDetailPanel.querySelectorAll('.drilldown-tab-content');
+          tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+              var targetId = tab.getAttribute('aria-controls');
+              tabs.forEach(function (t) {
+                t.setAttribute('aria-selected', 'false');
+              });
+              tab.setAttribute('aria-selected', 'true');
+              tabContents.forEach(function (content) {
+                content.setAttribute('aria-hidden', 'true');
+              });
+              var targetContent = nodeDetailPanel.querySelector('#' + targetId);
+              if (targetContent) {
+                targetContent.setAttribute('aria-hidden', 'false');
+              }
+            });
+          });
+
+          // Attach expandable member click handlers
+          var expandableMembers = nodeDetailPanel.querySelectorAll('.drilldown-member-expandable');
+          expandableMembers.forEach(function (member) {
+            var header = member.querySelector('.drilldown-member-header');
+            var body = member.querySelector('.drilldown-member-body');
+            var toggle = member.querySelector('.drilldown-member-toggle');
+            if (header && body && toggle) {
+              header.addEventListener('click', function () {
+                var isExpanded = member.getAttribute('aria-expanded') === 'true';
+                member.setAttribute('aria-expanded', String(!isExpanded));
+                header.setAttribute('aria-expanded', String(!isExpanded));
+                body.hidden = isExpanded;
+              });
+            }
+          });
+        }
       }
 
       // --- navigation ------------------------------------------------------
@@ -13688,8 +14122,7 @@
         }
         if (goingRoot) {
           if (mount(null, true) === false) return;
-          detailPanel.hidden = true;
-          detailPanel.innerHTML = '';
+          closeDrilldownDetail();
         } else {
           var payload = payloadFor(level.id);
           if (!payload || mount(levelSvg(payload), false) === false) {
@@ -13720,29 +14153,39 @@
       // the first descent and every later double-click would be silently dead.
       // The node lookup below is still `closest`, so which level a click came
       // from needs no bookkeeping.
+      function cancelPendingClick() {
+        if (pendingClickTimer) {
+          window.clearTimeout(pendingClickTimer);
+          pendingClickTimer = 0;
+        }
+        pendingClickId = null;
+      }
+
       container.addEventListener('click', function (event) {
         var node = event.target.closest('[data-node-id]');
         if (!node) return;
-        if (event.target.closest('.drilldown-detail')) return;
+        if (event.target.closest('.drilldown-detail') || event.target.closest('#node-detail-panel')) return;
         var id = node.getAttribute('data-node-id');
-        var now = Date.now();
-        // Detect a real double-click from two rapid clicks on the same node.
-        // Headless Chrome doesn't always synthesize a `dblclick` DOM event from
-        // `clickCount: 2` mouse events, so descend here as well as in the
-        // `dblclick` handler. `lastDescendAt` guards against descending twice
-        // if both handlers fire.
-        if (lastClickId === id && now - lastClickAt < 400) {
-          if (payloadFor(id) && now - lastDescendAt > 400) {
-            lastDescendAt = now;
+        // Second click on the same node inside the window = descend. Descending
+        // here (rather than only in `dblclick`) keeps the behaviour identical on
+        // touch and in headless Chrome, which does not synthesize `dblclick`.
+        if (pendingClickId === id && pendingClickTimer) {
+          cancelPendingClick();
+          if (payloadFor(id) && Date.now() - lastDescendAt > DOUBLE_CLICK_MS) {
+            lastDescendAt = Date.now();
             descend(id);
           }
-          lastClickAt = 0;
-          lastClickId = null;
           return;
         }
-        lastClickAt = now;
-        lastClickId = id;
-        showDetail(id);
+        cancelPendingClick();
+        pendingClickId = id;
+        pendingClickTimer = window.setTimeout(function () {
+          pendingClickTimer = 0;
+          var pendingId = pendingClickId;
+          pendingClickId = null;
+          // Re-check: a pan or a descent may have replaced the diagram.
+          if (pendingId === id) showNodeDetail(id);
+        }, DOUBLE_CLICK_MS);
       }, true);
 
       container.addEventListener('dblclick', function (event) {
@@ -13751,11 +14194,13 @@
         if (!node) return;
         var id = node.getAttribute('data-node-id');
         if (!payloadFor(id)) return;
-        // If the click handler already descended from this double-click (within
-        // 400 ms), don't descend again — that would push a duplicate breadcrumb.
-        if (Date.now() - lastDescendAt <= 400) return;
+        // The click handler already owns descend; this only covers a browser
+        // that fires `dblclick` without two preceding `click` events.
+        if (Date.now() - lastDescendAt <= DOUBLE_CLICK_MS) return;
+        if (pendingClickId !== id) return;
         event.preventDefault();
         event.stopPropagation();
+        cancelPendingClick();
         lastDescendAt = Date.now();
         descend(id);
       }, true);
@@ -13778,10 +14223,8 @@
         if (!crumb) return;
         goTo(Number(crumb.getAttribute('data-crumb-index')));
       });
-      document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape' && stack.length > 1) goBack();
-      });
-
+      // Escape is handled once, centrally, by Archify.escapeLadder (UI-004);
+      // this module only exposes the step-back action it should call.
       renderTrail();
 
       return {
@@ -13789,8 +14232,99 @@
         depth: function () { return stack.length - 1; },
         descend: descend,
         back: goBack,
+        goBack: goBack,
         reset: function () { goTo(0); }
       };
+    })();
+
+    // UI-001: close whichever detail panel is open. Returns true when one was
+    // actually closed, so the Escape ladder can decide whether it consumed the
+    // key. Both panels are mutually exclusive, so at most one branch runs.
+    Archify.closeDetailPanels = function () {
+      var closed = false;
+      var drill = document.getElementById('drilldown-detail');
+      if (drill && !drill.hidden) { drill.hidden = true; drill.innerHTML = ''; closed = true; }
+      var node = document.getElementById('node-detail-panel');
+      if (node && !node.hidden) { node.hidden = true; node.innerHTML = ''; closed = true; }
+      return closed;
+    };
+
+    /* ============================================================
+       UI-002 — draggable detail panels.
+       Both #drilldown-detail and #node-detail-panel are position:fixed in the
+       same top-right slot. Their header bar becomes a drag handle so a reader
+       can move a panel off the diagram. Pointer Events cover mouse, pen and
+       touch with one code path; the panel is clamped to the viewport and its
+       controls never start a drag.
+       ============================================================ */
+    (function () {
+      var DRAG_MARGIN = 8;
+      var drag = null;
+
+      function isControl(target) {
+        return !!(target && target.closest &&
+          target.closest('button, a, input, select, textarea, [role="button"], [contenteditable=""]'));
+      }
+
+      function clamp(value, min, max) {
+        if (max < min) return min;
+        return Math.min(Math.max(value, min), max);
+      }
+
+      function beginDrag(event) {
+        if (event.button !== 0 && event.pointerType === 'mouse') return;
+        if (isControl(event.target)) return;
+        var head = event.target.closest('.drilldown-detail-head');
+        if (!head) return;
+        var panel = head.closest('#drilldown-detail, #node-detail-panel');
+        if (!panel || panel.hidden) return;
+        var rect = panel.getBoundingClientRect();
+        // Pinning left/top/bottom/right freezes the panel where the user sees
+        // it before we start writing left/top during the move.
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        panel.setAttribute('data-panel-dragging', 'true');
+        drag = {
+          pointerId: event.pointerId,
+          panel: panel,
+          offsetX: event.clientX - rect.left,
+          offsetY: event.clientY - rect.top,
+          width: rect.width,
+          height: rect.height
+        };
+        event.preventDefault();
+        event.stopPropagation();
+        try { head.setPointerCapture(event.pointerId); } catch (_) {}
+      }
+
+      function moveDrag(event) {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        var maxLeft = window.innerWidth - drag.width - DRAG_MARGIN;
+        var maxTop = window.innerHeight - drag.height - DRAG_MARGIN;
+        drag.panel.style.left = clamp(event.clientX - drag.offsetX, DRAG_MARGIN, maxLeft) + 'px';
+        drag.panel.style.top = clamp(event.clientY - drag.offsetY, DRAG_MARGIN, maxTop) + 'px';
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      function endDrag(event) {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        var panel = drag.panel;
+        drag = null;
+        panel.removeAttribute('data-panel-dragging');
+        try { event.target.releasePointerCapture(event.pointerId); } catch (_) {}
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      // Delegated on the document so panels created later (the drill-down panel
+      // is re-rendered by innerHTML) still drag without re-binding.
+      document.addEventListener('pointerdown', beginDrag, true);
+      document.addEventListener('pointermove', moveDrag, true);
+      document.addEventListener('pointerup', endDrag, true);
+      document.addEventListener('pointercancel', endDrag, true);
     })();
 
     /* ============================================================
@@ -14699,9 +15233,15 @@
           ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopy(value); })
           : Promise.resolve(fallbackCopy(value));
         return copy.then(function (copied) {
+          return copied === true;
+        }).catch(function () {
+          return false;
+        }).then(function (copied) {
           copyBtn.textContent = viewerText(copied ? 'viewer.common.copied' : 'viewer.common.copyFailed');
+          copyBtn.setAttribute('data-copy-state', copied ? 'copied' : 'failed');
           copyBtn.setAttribute('aria-label', viewerText(copied ? 'viewer.route.copy.success' : 'viewer.route.copy.failed'));
           window.setTimeout(function () {
+            copyBtn.removeAttribute('data-copy-state');
             copyBtn.textContent = viewerText('viewer.route.copy');
             copyBtn.setAttribute('aria-label', viewerText('viewer.route.copy.aria'));
           }, 1600);
@@ -15370,8 +15910,16 @@
           ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopy(value); })
           : Promise.resolve(fallbackCopy(value));
         return copy.then(function (copied) {
+          return copied === true;
+        }).catch(function () {
+          return false;
+        }).then(function (copied) {
           copyBtn.textContent = viewerText(copied ? 'viewer.common.copied' : 'viewer.common.copyFailed');
-          window.setTimeout(function () { copyBtn.textContent = viewerText('viewer.common.copyLink'); }, 1600);
+          copyBtn.setAttribute('data-copy-state', copied ? 'copied' : 'failed');
+          window.setTimeout(function () {
+            copyBtn.removeAttribute('data-copy-state');
+            copyBtn.textContent = viewerText('viewer.common.copyLink');
+          }, 1600);
           return copied;
         });
       }
@@ -15709,8 +16257,11 @@
     document.addEventListener('keydown', function (e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.defaultPrevented) return;
-      var t = e.target;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // UI-003: a focused interactive control owns its own keys. Guarding only
+      // inputs let a focused button/menu item/select swallow the key *and*
+      // still fire the page shortcut (T/S/E/R/M/...). Escape stays global
+      // because closing an overlay is never a control's own action.
+      if (interactiveKeyOwner(e.target) && e.key !== 'Escape') return;
       if (Archify.preset && Archify.preset.isOpen() && e.key !== 'Escape' && e.key !== 's' && e.key !== 'S') {
         Archify.preset.close(false);
       }
@@ -15750,33 +16301,11 @@
       } else if (e.key === '0') {
         e.preventDefault();
         Archify.view.reset();
-      } else if (e.key === 'Escape' && Archify.preset.isOpen()) {
-        e.preventDefault();
-        Archify.preset.close(true);
-      } else if (e.key === 'Escape' && Archify.semanticLens.isOpen()) {
-        e.preventDefault();
-        Archify.semanticLens.close({ restoreFocus: true });
-      } else if (e.key === 'Escape' && Archify.semanticLens.active()) {
-        e.preventDefault();
-        Archify.semanticLens.clear({ preserveView: true });
-      } else if (e.key === 'Escape' && Archify.guide.isOpen()) {
-        e.preventDefault();
-        Archify.guide.close({ restoreFocus: true });
-      } else if (e.key === 'Escape' && Archify.radar.isOpen()) {
-        e.preventDefault();
-        Archify.radar.close({ restoreFocus: true });
-      } else if (e.key === 'Escape' && Archify.routeProbe.active()) {
-        e.preventDefault();
-        Archify.routeProbe.escape({ restoreFocus: true });
-      } else if (e.key === 'Escape' && Archify.intentTrace.active()) {
-        e.preventDefault();
-        Archify.intentTrace.clear();
-      } else if (e.key === 'Escape' && Archify.focus.active()) {
-        e.preventDefault();
-        Archify.focus.clear({ restoreFocus: true });
-      } else if (e.key === 'Escape' && Archify.presentation.active()) {
-        e.preventDefault();
-        Archify.presentation.exit();
+      } else if (e.key === 'Escape') {
+        // UI-004: one press, one action. The ladder owns the whole priority
+        // order (overlays -> detail panels -> descend stack -> view state ->
+        // presentation) so unrelated layers cannot chain off the same key.
+        Archify.escapeLadder(e);
       }
     });
   </script>

@@ -1,0 +1,2013 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "toolsclaw — Ultra-lightweight tool-calling agent framework",
+    "quality_profile": "showcase",
+    "locale": "zh-CN",
+    "legend": {
+      "mode": "hidden"
+    },
+    "viewBox": [
+      1330,
+      840
+    ],
+    "views": [
+      {
+        "id": "request-path",
+        "label": "Request path",
+        "focus": [
+          "cli",
+          "sdk",
+          "runner",
+          "provider"
+        ],
+        "note": "Follow one user message from the CLI into the agent loop and out to the model."
+      },
+      {
+        "id": "tool-execution",
+        "label": "Tool execution",
+        "focus": [
+          "runner",
+          "tool",
+          "tools-package"
+        ],
+        "note": "Trace how the model tool calls reach a concrete sandboxed tool."
+      },
+      {
+        "id": "memory-layer",
+        "label": "Memory and hooks",
+        "focus": [
+          "runner",
+          "hook",
+          "memory",
+          "persistent-memory"
+        ],
+        "note": "Compression and persistent recall both run as lifecycle hooks."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "cli",
+      "pos": [
+        40,
+        240
+      ],
+      "sublabel": "typer CLI",
+      "tag": "13 commands",
+      "summary": "Command-line surface: init, run, chat, and the memory subcommands.",
+      "detail": {
+        "kind": "code",
+        "title": "cli.py",
+        "symbol": "cli",
+        "language": "python",
+        "methods": [
+          {
+            "name": "init",
+            "signature": "def init(workspace: str = typer.Option(\"\"))",
+            "doc": "Create config + workspace.",
+            "type": "Typer command",
+            "value": "→ None"
+          },
+          {
+            "name": "run",
+            "signature": "def run(message: str, ...)",
+            "doc": "One-shot agent run.",
+            "type": "Typer command",
+            "value": "message: str → AgentResult"
+          },
+          {
+            "name": "chat",
+            "signature": "def chat(...)",
+            "doc": "Interactive REPL.",
+            "type": "Typer command",
+            "value": "→ InteractiveSession"
+          },
+          {
+            "name": "memory_add / memory_search / memory_link_graph / ...",
+            "doc": "Ten memory management commands over MemoryStore.",
+            "type": "Memory commands",
+            "value": "name: str → MemoryEntry"
+          }
+        ],
+        "notes": [
+          "_resolve_memory_store() is the shared helper every memory command funnels through."
+        ],
+        "sources": [
+          {
+            "path": "cli.py",
+            "line": 1,
+            "endLine": 399
+          }
+        ],
+        "code": "\"\"\"CLI entry point for toolsclaw.\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nfrom pathlib import Path\n\nimport typer\nfrom rich.console import Console\nfrom rich.table import Table\n\nfrom toolsclaw.config import DEFAULT_CONFIG_FILE, init_config, load_config\nfrom toolsclaw.persistent_memory import Memory, MemoryStore\nfrom toolsclaw.runner import AgentRunner\n\napp = typer.Typer(\n    name=\"toolsclaw\",\n    help=\"Ultra-lightweight tool-calling agent framework.\",\n    no_args_is_help=True,\n)\nconsole = Console()\n\n\ndef _resolve_memory_store(config_path: str = \"\") -> MemoryStore:\n    \"\"\"Build a MemoryStore from config (or default workspace).\"\"\"\n    cfg_path = Path(config_path) if config_path else None\n    cfg = load_config(cfg_path)\n    pm_cfg = cfg.persistent_memory\n    if pm_cfg.memory_dir:\n        base = Path(pm_cfg.memory_dir)\n    elif cfg.workspace:\n        base = Path(cfg.workspace).expanduser().resolve() / \".claude\"\n    else:\n        base = Path.cwd() / \".claude\"\n    return MemoryStore(base)\n\n\n@app.command()\ndef init(\n    workspace: str = typer.Option(\n        \"\", \"--workspace\", \"-w\", help=\"Workspace directory path.\"\n    ),\n) -> None:\n    \"\"\"Initialize config and workspace.\"\"\"\n    cfg = init_config(workspace)\n    console.print(f\"[green]OK[/green] Config saved to {DEFAULT_CONFIG_FILE}\")\n    console.print(f\"[green]OK[/green] Workspace: {cfg.get_workspace()}\")\n\n\n@app.command()\ndef run(\n    message: str = typer.Argument(..., help=\"Message to send to the agent.\"),\n    config: str = typer.Option(\n        \"\", \"--config\", \"-c\", help=\"Path to config file.\"\n    ),\n) -> None:\n    \"\"\"Send a single message and print the response.\"\"\"\n    cfg_path = Path(config) if config else None\n    cfg = load_config(cfg_path)\n    runner = AgentRunner(cfg)\n    result = asyncio.run(runner.run(message))\n    console.print(result)\n\n\n@app.command()\ndef chat(\n    config: str = typer.Option(\n        \"\", \"--config\", \"-c\", help=\"Path to config file.\"\n    ),\n) -> None:\n    \"\"\"Start an interactive chat session.\"\"\"\n    cfg_path = Path(config) if config else None\n    cfg = load_config(cfg_path)\n    runner = AgentRunner(cfg)\n    asyncio.run(runner.run_interactive())\n\n\n# ---------------------------------------------------------------------------\n# Memory management subcommands\n# ---------------------------------------------------------------------------\n\n\n@app.command()\ndef memory_add(\n    name: str = typer.Argument(..., help=\"Memory name (kebab-case).\"),\n    content: str = typer.Argument(..., help=\"Memory content.\"),\n    type: str = typer.Option(\"reference\", \"--type\", \"-t\", help=\"Memory type: user, feedback, project, reference.\"),\n    description: str = typer.Option(\"\", \"--desc\", \"-d\", help=\"One-line description.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Add a new memory entry.\"\"\"\n    store = _resolve_memory_store(config)\n    if store.exists(name):\n        console.print(f\"[yellow]Memory '{name}' already exists. Use 'memory update' to modify it.[/yellow]\")\n        raise typer.Exit(1)\n\n    mem = Memory(\n        name=name,\n        description=description,\n        type=type,\n        content=content,\n    )\n    store.save(mem)\n    store.rebuild_index()\n    console.print(f\"[green]✓[/green] Memory '{name}' saved.\")\n    console.print(f\"   Location: {store.memory_dir / name}.md\")\n\n\n@app.command()\ndef memory_update(\n    name: str = typer.Argument(..., help=\"Memory name to update.\"),\n    content: str = typer.Argument(None, help=\"New content. Leave empty to keep existing.\"),\n    description: str = typer.Option(None, \"--desc\", \"-d\", help=\"New description.\"),\n    type: str = typer.Option(None, \"--type\", \"-t\", help=\"New type.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Update an existing memory entry.\"\"\"\n    store = _resolve_memory_store(config)\n    mem = store.load(name)\n    if mem is None:\n        console.print(f\"[red]Error:[/red] Memory '{name}' not found.\")\n        raise typer.Exit(1)\n\n    # Create updated memory\n    updated = Memory(\n        name=mem.name,\n        description=description if description is not None else mem.description,\n        type=type if type is not None else mem.type,\n        content=content if content is not None else mem.content,\n        links=mem.links,\n        created_at=mem.created_at,\n    )\n    store.save(updated)\n    store.rebuild_index()\n    console.print(f\"[green]✓[/green] Memory '{name}' updated.\")\n\n\n@app.command()\ndef memory_delete(\n    name: str = typer.Argument(..., help=\"Memory name to delete.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Delete a memory entry.\"\"\"\n    store = _resolve_memory_store(config)\n    if store.delete(name):\n        store.rebuild_index()\n        console.print(f\"[green]✓[/green] Memory '{name}' deleted.\")\n    else:\n        console.print(f\"[yellow]Memory '{name}' not found.[/yellow]\")\n\n\n@app.command()\ndef memory_list(\n    type: str = typer.Option(None, \"--type\", \"-t\", help=\"Filter by type (user, feedback, project, reference).\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"List all stored memories.\"\"\"\n    store = _resolve_memory_store(config)\n    if type:\n        memories = store.find_by_type(type)\n    else:\n        memories = store.list_memories()\n\n    if not memories:\n        console.print(\"[dim]No memories stored yet.[/dim]\")\n        return\n\n    table = Table(title=f\"Memories ({len(memories)})\")\n    table.add_column(\"Name\", style=\"cyan\")\n    table.add_column(\"Type\", style=\"magenta\")\n    table.add_column(\"Description\")\n    table.add_column(\"Links\")\n\n    for mem in memories:\n        links_str = \", \".join(mem.links) if mem.links else \"\"\n        table.add_row(mem.name, mem.type, mem.description[:60] if mem.description else \"\", links_str)\n\n    console.print(table)\n\n\n@app.command()\ndef memory_search(\n    query: str = typer.Argument(..., help=\"Search query.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Search memories by keyword.\"\"\"\n    store = _resolve_memory_store(config)\n    results = store.search(query)\n\n    if not results:\n        console.print(f\"[dim]No memories matching '{query}'.[/dim]\")\n        return\n\n    table = Table(title=f\"Search results for '{query}' ({len(results)})\")\n    table.add_column(\"Name\", style=\"cyan\")\n    table.add_column(\"Type\", style=\"magenta\")\n    table.add_column(\"Content preview\")\n\n    for mem in results:\n        preview = mem.content[:100].replace(\"\\n\", \" \")\n        table.add_row(mem.name, mem.type, preview)\n\n    console.print(table)\n\n\n@app.command()\ndef memory_show(\n    name: str = typer.Argument(..., help=\"Memory name to display.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Show full content of a memory.\"\"\"\n    store = _resolve_memory_store(config)\n    mem = store.load(name)\n    if mem is None:\n        console.print(f\"[red]Error:[/red] Memory '{name}' not found.\")\n        raise typer.Exit(1)\n\n    console.print(f\"[bold cyan]{mem.name}[/bold cyan]\")\n    console.print(f\"  Type: {mem.type}\")\n    console.print(f\"  Description: {mem.description}\")\n    if mem.links:\n        console.print(f\"  Links: {', '.join(mem.links)}\")\n    console.print(f\"  Created: {mem.created_at.isoformat()}\")\n    console.print(f\"  Updated: {mem.updated_at.isoformat()}\")\n    console.print()\n    console.print(mem.content)\n\n\n@app.command()\ndef memory_rebuild(\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Rebuild the MEMORY.md index.\"\"\"\n    store = _resolve_memory_store(config)\n    content = store.rebuild_index()\n    console.print(f\"[green]✓[/green] Index rebuilt at {store.index_path}\")\n    console.print(f\"   {len(store.list_memories())} memories indexed.\")\n\n\n@app.command()\ndef memory_import(\n    source: str = typer.Argument(..., help=\"Source directory with memory files.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Import memories from an external directory.\"\"\"\n    store = _resolve_memory_store(config)\n    count = store.import_memories(source)\n    if count > 0:\n        store.rebuild_index()\n    console.print(f\"[green]✓[/green] Imported {count} memories.\")\n\n\n@app.command()\ndef memory_stats(\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Show memory store statistics.\"\"\"\n    store = _resolve_memory_store(config)\n    stats = store.stats()\n\n    table = Table(title=\"Memory Store Statistics\")\n    table.add_column(\"Metric\", style=\"cyan\")\n    table.add_column(\"Value\")\n\n    table.add_row(\"Total memories\", str(stats[\"total\"]))\n    for type_, count in stats[\"by_type\"].items():\n        table.add_row(f\"  Type: {type_}\", str(count))\n    table.add_row(\"Total [[links]]\", str(stats[\"total_links\"]))\n    table.add_row(\"Orphan links\", str(stats[\"orphan_links\"]))\n    table.add_row(\"Oldest\", stats[\"oldest\"] or \"-\")\n    table.add_row(\"Newest\", stats[\"newest\"] or \"-\")\n\n    size_kb = stats[\"total_size_bytes\"] / 1024\n    if size_kb > 1024:\n        table.add_row(\"Disk size\", f\"{size_kb / 1024:.1f} MB\")\n    else:\n        table.add_row(\"Disk size\", f\"{size_kb:.1f} KB\")\n\n    console.print(table)\n    console.print(f\"\\nMemory directory: {store.memory_dir}\")\n\n\n@app.command()\ndef memory_related(\n    name: str = typer.Argument(..., help=\"Memory name to find relations for.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Show memories related to a given memory via [[links]].\"\"\"\n    store = _resolve_memory_store(config)\n    related = store.find_related(name)\n\n    if not related:\n        console.print(f\"[dim]No related memories found for '{name}'.[/dim]\")\n        return\n\n    # Show the memory itself first\n    mem = store.load(name)\n    if mem:\n        console.print(f\"[bold cyan]{mem.name}[/bold cyan]\")\n        console.print(f\"  Type: {mem.type}  |  Links: {', '.join(mem.links) if mem.links else '(none)'}\")\n        console.print()\n\n    table = Table(title=f\"Related memories ({len(related)})\")\n    table.add_column(\"Name\", style=\"cyan\")\n    table.add_column(\"Type\", style=\"magenta\")\n    table.add_column(\"Description\")\n    table.add_column(\"Links\")\n\n    for mem in related:\n        links_str = \", \".join(mem.links) if mem.links else \"\"\n        table.add_row(mem.name, mem.type, mem.description[:60] if mem.description else \"\", links_str)\n\n    console.print(table)\n\n\n@app.command()\ndef memory_consolidate(\n    dry_run: bool = typer.Option(True, \"--dry-run\", \"-n\", help=\"Preview merges without applying.\"),\n    apply: bool = typer.Option(False, \"--apply\", \"-a\", help=\"Actually apply consolidation (overrides --dry-run).\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Merge duplicate or highly similar memories.\"\"\"\n    store = _resolve_memory_store(config)\n    result = store.consolidate(dry_run=not apply and not dry_run is False)\n\n    if not result[\"details\"]:\n        console.print(\"[green]✓[/green] No duplicate memories found.\")\n        return\n\n    table = Table(\n        title=f\"Consolidation {'Preview' if result['dry_run'] else 'Result'} \"\n              f\"({result['merged']} merged)\"\n    )\n    table.add_column(\"Kept\", style=\"green\")\n    table.add_column(\"Removed\", style=\"red\")\n    table.add_column(\"Merged Description\")\n\n    for d in result[\"details\"]:\n        table.add_row(d[\"kept\"], d[\"removed\"], d[\"description\"][:80])\n\n    console.print(table)\n\n    if result[\"dry_run\"]:\n        console.print(\"\\n[yellow]Dry run mode[/yellow] — Use --apply to actually merge.\")\n    else:\n        console.print(f\"\\n[green]✓[/green] {result['merged']} duplicate(s) merged.\")\n        store.rebuild_index()\n\n\n@app.command()\ndef memory_export(\n    output_dir: str = typer.Argument(..., help=\"Output directory for exported memories.\"),\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Export all memories as individual markdown files to a directory.\"\"\"\n    store = _resolve_memory_store(config)\n    output = Path(output_dir).expanduser().resolve()\n    output.mkdir(parents=True, exist_ok=True)\n\n    memories = store.list_memories()\n    if not memories:\n        console.print(\"[dim]No memories to export.[/dim]\")\n        return\n\n    count = 0\n    for mem in memories:\n        file_path = output / f\"{mem.name}.md\"\n        file_path.write_text(mem.to_frontmatter(), encoding=\"utf-8\")\n        count += 1\n\n    console.print(f\"[green]✓[/green] Exported {count} memories to {output}\")\n\n\n@app.command()\ndef memory_link_graph(\n    config: str = typer.Option(\"\", \"--config\", \"-c\", help=\"Path to config file.\"),\n) -> None:\n    \"\"\"Show the [[link]] graph between memories.\"\"\"\n    store = _resolve_memory_store(config)\n    graph = store.get_link_graph()\n\n    if not graph:\n        console.print(\"[dim]No [[links]] between memories.[/dim]\")\n        return\n\n    table = Table(title=\"Memory Link Graph\")\n    table.add_column(\"Memory\", style=\"cyan\")\n    table.add_column(\"Links To\")\n\n    for name, links in sorted(graph.items()):\n        links_str = \", \".join(links)\n        table.add_row(name, links_str)\n\n    console.print(table)\n    console.print(f\"\\nTotal: {len(graph)} memories with links\")\n\n\nif __name__ == \"__main__\":\n    app()"
+      }
+    },
+    {
+      "id": "sdk",
+      "type": "frontend",
+      "label": "sdk",
+      "pos": [
+        250,
+        240
+      ],
+      "sublabel": "ToolsClaw facade",
+      "tag": "RunResult",
+      "summary": "Programmatic facade wrapping AgentRunner for embedding.",
+      "detail": {
+        "kind": "code",
+        "title": "ToolsClaw facade + RunResult",
+        "symbol": "ToolsClaw",
+        "language": "python",
+        "methods": [
+          {
+            "name": "from_config",
+            "signature": "@classmethod def from_config(cls, config_path=None, *, workspace=None, skills_dir=None, model=None, api_key=None)",
+            "doc": "Builds a runner from config plus overrides.",
+            "type": "classmethod",
+            "value": "config_path?, workspace?, skills_dir?, model?, api_key? → ToolsClaw"
+          },
+          {
+            "name": "from_runner",
+            "signature": "@classmethod def from_runner(cls, runner: AgentRunner)",
+            "doc": "Wraps an existing runner.",
+            "type": "classmethod",
+            "value": "runner: AgentRunner → ToolsClaw"
+          },
+          {
+            "name": "run",
+            "signature": "async def run(self, message: str, ...) -> RunResult",
+            "doc": "Runs one message, returning content plus usage and memory counters.",
+            "type": "async method",
+            "value": "message: str → RunResult"
+          },
+          {
+            "name": "stream_run",
+            "signature": "async def stream_run(self, message: str, ...)",
+            "doc": "Streaming variant.",
+            "type": "async method",
+            "value": "message: str → AsyncIterator[str]"
+          }
+        ],
+        "notes": [
+          "SDKCaptureHook records tool usage and messages so RunResult can report tools_used and full history."
+        ],
+        "sources": [
+          {
+            "path": "sdk.py",
+            "line": 68,
+            "endLine": 289
+          }
+        ],
+        "code": "class ToolsClaw:\n    \"\"\"Programmatic facade for running the toolsclaw agent.\n\n    Usage::\n\n        # From config file\n        agent = ToolsClaw.from_config()\n        result = await agent.run(\"Hello\")\n\n        # With custom workspace and skills\n        agent = ToolsClaw.from_config(\n            workspace=\"./my-project\",\n            skills_dir=\"./my-skills\",\n        )\n        result = await agent.run(\"Do something\")\n\n        # Multiple independent agents\n        agent_a = ToolsClaw.from_config(workspace=\"./project-a\")\n        agent_b = ToolsClaw.from_config(workspace=\"./project-b\")\n    \"\"\"\n\n    def __init__(self, runner: AgentRunner) -> None:\n        self._runner = runner\n\n    @classmethod\n    def from_config(\n        cls,\n        config_path: str | Path | None = None,\n        *,\n        workspace: str | Path | None = None,\n        skills_dir: str | Path | None = None,\n        model: str | None = None,\n        api_key: str | None = None,\n        api_base: str | None = None,\n        max_iterations: int | None = None,\n        memory_compression: bool | None = None,\n        memory_strategy: str | None = None,\n        memory_threshold: int | None = None,\n        persistent_memory: bool | None = None,\n        persistent_memory_dir: str | None = None,\n        auto_save_memories: bool | None = None,\n    ) -> ToolsClaw:\n        \"\"\"Create a ToolsClaw instance from a config file.\n\n        Args:\n            config_path: Path to ``config.json``.  Defaults to\n                ``~/.toolsclaw/config.json``.\n            workspace: Override the workspace directory from config.\n                All file tools and exec are sandboxed to this directory.\n            skills_dir: Extra skills directory to load in addition to\n                workspace/skills and builtin skills. Skills in this\n                directory take priority over builtin skills.\n            model: Model name (e.g. ``\"mimo-v2.5-pro\"``). Overrides config.\n            api_key: API key. Overrides config.\n            api_base: API base URL. Overrides config.\n            max_iterations: Maximum number of LLM round-trips. Overrides config.\n            memory_compression: Enable/disable memory compression.\n                Overrides config.\n            memory_strategy: Compression strategy (truncate, drop,\n                summarize, hybrid). Overrides config.\n            memory_threshold: Token threshold to trigger compression.\n                Overrides config.\n            persistent_memory: Enable/disable persistent memory.\n                Overrides config.\n            persistent_memory_dir: Custom memory directory.\n                Overrides config.\n            auto_save_memories: Enable/disable auto-saving memories.\n                Overrides config.\n        \"\"\"\n        config = load_config(Path(config_path) if config_path else None)\n\n        if workspace is not None:\n            config.workspace = str(Path(workspace).expanduser().resolve())\n\n        # apply model / provider overrides\n        if model is not None:\n            config.model = model\n        if api_key is not None or api_base is not None:\n            existing = config.get_provider_config()\n            config.providers[\"default\"] = ProviderConfig(\n                api_key=api_key or existing.api_key,\n                api_base=api_base or existing.api_base,\n            )\n            config.provider = \"default\"\n\n        if max_iterations is not None:\n            config.max_iterations = max_iterations\n\n        # memory compression overrides\n        if memory_compression is not None:\n            config.memory.enabled = memory_compression\n        if memory_strategy is not None:\n            config.memory.strategy = memory_strategy\n        if memory_threshold is not None:\n            config.memory.threshold_tokens = memory_threshold\n\n        # persistent memory overrides\n        if persistent_memory is not None:\n            config.persistent_memory.enabled = persistent_memory\n        if persistent_memory_dir is not None:\n            config.persistent_memory.memory_dir = persistent_memory_dir\n        if auto_save_memories is not None:\n            config.persistent_memory.auto_save = auto_save_memories\n\n        runner = AgentRunner(\n            config,\n            skills_dir=skills_dir,\n        )\n        return cls(runner)\n\n    @classmethod\n    def from_runner(cls, runner: AgentRunner) -> ToolsClaw:\n        \"\"\"Create a ToolsClaw instance from an existing AgentRunner.\n\n        Useful when you need full control over runner construction\n        (custom tools, custom config, etc.).\n        \"\"\"\n        return cls(runner)\n\n    async def run(\n        self,\n        message: str,\n        *,\n        hooks: list[AgentHook] | None = None,\n    ) -> RunResult:\n        \"\"\"Run the agent once and return the result.\n\n        Args:\n            message: The user message to process.\n            hooks: Optional lifecycle hooks for this run.\n                These are composed with any hook already on the runner.\n\n        Returns:\n            RunResult with content, tools_used, and messages.\n        \"\"\"\n        capture = SDKCaptureHook()\n\n        # compose hooks: capture + user hooks + existing runner hook\n        all_hooks: list[AgentHook] = [capture]\n        if hooks:\n            all_hooks.extend(hooks)\n        if self._runner._hook:\n            all_hooks.append(self._runner._hook)\n\n        composite = CompositeHook(all_hooks) if len(all_hooks) > 1 else all_hooks[0]\n\n        # temporarily replace the runner's hook\n        prev_hook = self._runner._hook\n        self._runner._hook = composite\n        try:\n            content = await self._runner.run(message)\n        finally:\n            self._runner._hook = prev_hook\n\n        usage = self._runner._last_run_usage\n\n        # extract compression info from the hook chain\n        compression_triggered = False\n        compression_count = 0\n        memories_loaded = 0\n        memories_saved = 0\n        for h in all_hooks:\n            if hasattr(h, \"compression_count\"):\n                compression_count = h.compression_count\n                if h.compression_count > 0:\n                    compression_triggered = True\n            if hasattr(h, \"memories_loaded\"):\n                memories_loaded = getattr(h, \"memories_loaded\", 0)\n            if hasattr(h, \"memories_saved\"):\n                memories_saved = getattr(h, \"memories_saved\", 0)\n\n        return RunResult(\n            content=content,\n            tools_used=capture.tools_used,\n            messages=capture.messages,\n            prompt_tokens=usage.prompt_tokens,\n            completion_tokens=usage.completion_tokens,\n            total_tokens=usage.total_tokens,\n            iterations=usage.iterations,\n            compression_triggered=compression_triggered,\n            compression_count=compression_count,\n            memories_loaded=memories_loaded,\n            memories_saved=memories_saved,\n        )\n\n    async def stream_run(\n        self,\n        message: str,\n        *,\n        hooks: list[AgentHook] | None = None,\n    ) -> AsyncIterator[str]:\n        \"\"\"Stream the agent's response incrementally.\n\n        Args:\n            message: The user message to process.\n            hooks: Optional lifecycle hooks for this run.\n\n        Yields:\n            String chunks of the assistant's response content in real-time.\n\n        Usage::\n\n            async for chunk in agent.run(\"Hello\", stream=True):\n                print(chunk, end=\"\", flush=True)\n        \"\"\"\n        capture = SDKCaptureHook()\n\n        all_hooks: list[AgentHook] = [capture]\n        if hooks:\n            all_hooks.extend(hooks)\n        if self._runner._hook:\n            all_hooks.append(self._runner._hook)\n\n        composite = CompositeHook(all_hooks) if len(all_hooks) > 1 else all_hooks[0]\n\n        prev_hook = self._runner._hook\n        self._runner._hook = composite\n        try:\n            async for chunk in await self._runner.run(message, stream=True):  # type: ignore[arg-type]\n                yield chunk\n        finally:\n            self._runner._hook = prev_hook"
+      }
+    },
+    {
+      "id": "config",
+      "type": "backend",
+      "label": "config",
+      "pos": [
+        250,
+        480
+      ],
+      "sublabel": "pydantic models",
+      "tag": "JSON file",
+      "summary": "Pydantic configuration models and load/save/init helpers.",
+      "detail": {
+        "kind": "diagram",
+        "title": "config.py — configuration",
+        "components": [
+          {
+            "id": "root-config",
+            "type": "backend",
+            "label": "Config",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Root model: model, provider, workspace, sandbox, max_iterations.",
+            "detail": {
+              "kind": "code",
+              "title": "Config",
+              "symbol": "Config",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "model",
+                  "type": "str",
+                  "value": "\"deepseek/deepseek-chat\""
+                },
+                {
+                  "name": "provider",
+                  "type": "str",
+                  "value": "\"auto\""
+                },
+                {
+                  "name": "workspace",
+                  "type": "str"
+                },
+                {
+                  "name": "sandbox",
+                  "type": "bool",
+                  "value": "True"
+                },
+                {
+                  "name": "max_iterations",
+                  "type": "int",
+                  "value": "100",
+                  "doc": "Bounds the agent loop."
+                },
+                {
+                  "name": "providers",
+                  "type": "dict[str, ProviderConfig]"
+                },
+                {
+                  "name": "exec / memory / persistent_memory",
+                  "doc": "Nested config blocks."
+                }
+              ],
+              "methods": [
+                {
+                  "name": "get_provider_config",
+                  "signature": "def get_provider_config(self) -> ProviderConfig",
+                  "doc": "Explicit provider wins; otherwise first with an api_key."
+                },
+                {
+                  "name": "get_workspace",
+                  "signature": "def get_workspace(self) -> Path",
+                  "doc": "Expands and resolves, defaulting to cwd."
+                }
+              ],
+              "sources": [
+                {
+                  "path": "config.py",
+                  "line": 74,
+                  "endLine": 101
+                }
+              ],
+              "code": "class Config(BaseModel):\n    \"\"\"Root configuration.\"\"\"\n\n    model: str = \"deepseek/deepseek-chat\"\n    provider: str = \"auto\"\n    workspace: str = \"\"\n    sandbox: bool = True\n    max_iterations: int = 100\n    providers: dict[str, ProviderConfig] = Field(default_factory=dict)\n    exec: ExecConfig = Field(default_factory=ExecConfig)\n    memory: MemoryCompressionConfig = Field(default_factory=MemoryCompressionConfig)\n    persistent_memory: PersistentMemoryConfig = Field(default_factory=PersistentMemoryConfig)\n\n    def get_provider_config(self) -> ProviderConfig:\n        \"\"\"Resolve the provider config for the current model.\"\"\"\n        if self.provider != \"auto\" and self.provider in self.providers:\n            return self.providers[self.provider]\n        # auto-detect: try matching model prefix\n        for name, cfg in self.providers.items():\n            if cfg.api_key:\n                return cfg\n        return ProviderConfig()\n\n    def get_workspace(self) -> Path:\n        \"\"\"Return the resolved workspace path.\"\"\"\n        if self.workspace:\n            return Path(self.workspace).expanduser().resolve()\n        return Path.cwd()"
+            }
+          },
+          {
+            "id": "exec-config",
+            "type": "security",
+            "label": "ExecConfig",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Shell execution settings including the deny-pattern list.",
+            "detail": {
+              "kind": "code",
+              "title": "ExecConfig",
+              "symbol": "ExecConfig",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "enable",
+                  "type": "bool",
+                  "value": "True"
+                },
+                {
+                  "name": "timeout",
+                  "type": "int",
+                  "value": "60"
+                },
+                {
+                  "name": "deny_patterns",
+                  "type": "list[str]",
+                  "doc": "Regexes blocking rm -rf /, mkfs, dd if=, fork bombs, shutdown, reboot."
+                }
+              ],
+              "notes": [
+                "deny_patterns is the security boundary for ExecTool; keep it in sync with _check_deny."
+              ],
+              "sources": [
+                {
+                  "path": "config.py",
+                  "line": 19,
+                  "endLine": 34
+                }
+              ],
+              "code": "class ExecConfig(BaseModel):\n    \"\"\"Shell execution settings.\"\"\"\n\n    enable: bool = True\n    timeout: int = 60\n    deny_patterns: list[str] = Field(default_factory=lambda: [\n        r\"rm\\s+-rf\\s+/\",\n        r\"del\\s+/[fFsS]\\s+[a-zA-Z]:\\\\\",\n        r\"format\\s+[a-zA-Z]:\",\n        r\"mkfs\\.\",\n        r\"dd\\s+if=\",\n        r\":\\(\\)\\{.*\\|.*&\\s*\\};\",  # fork bomb\n        r\"shutdown\",\n        r\"reboot\",\n    ])"
+            }
+          },
+          {
+            "id": "mem-config",
+            "type": "database",
+            "label": "MemoryCompressionConfig",
+            "pos": [
+              560,
+              40
+            ],
+            "summary": "Compression trigger and target ratio.",
+            "detail": {
+              "kind": "code",
+              "title": "MemoryCompressionConfig",
+              "symbol": "MemoryCompressionConfig",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "enabled",
+                  "type": "bool",
+                  "value": "False"
+                },
+                {
+                  "name": "strategy",
+                  "type": "str",
+                  "value": "\"hybrid\""
+                },
+                {
+                  "name": "threshold_tokens",
+                  "type": "int",
+                  "value": "80_000"
+                },
+                {
+                  "name": "target_ratio",
+                  "type": "float",
+                  "value": "0.5"
+                },
+                {
+                  "name": "min_rounds_to_keep",
+                  "type": "int",
+                  "value": "3"
+                },
+                {
+                  "name": "tool_result_max_chars",
+                  "type": "int",
+                  "value": "300"
+                }
+              ],
+              "sources": [
+                {
+                  "path": "config.py",
+                  "line": 36,
+                  "endLine": 55
+                }
+              ],
+              "code": "class MemoryCompressionConfig(BaseModel):\n    \"\"\"Memory compression settings for long conversations.\"\"\"\n\n    enabled: bool = False\n    \"\"\"Enable automatic memory compression.\"\"\"\n\n    strategy: str = \"hybrid\"\n    \"\"\"Compression strategy: truncate, drop, summarize, or hybrid.\"\"\"\n\n    threshold_tokens: int = 80_000\n    \"\"\"Trigger compression when estimated tokens exceed this value.\"\"\"\n\n    target_ratio: float = 0.5\n    \"\"\"Target compression ratio (0.0-1.0). 0.5 = compress to 50% of original.\"\"\"\n\n    min_rounds_to_keep: int = 3\n    \"\"\"Minimum number of recent conversation rounds to preserve intact.\"\"\"\n\n    tool_result_max_chars: int = 300\n    \"\"\"Max characters per tool result field after compression.\"\"\""
+            }
+          },
+          {
+            "id": "pm-config",
+            "type": "database",
+            "label": "PersistentMemoryConfig",
+            "pos": [
+              820,
+              40
+            ],
+            "summary": "Persistent memory toggle and recall budget.",
+            "detail": {
+              "kind": "code",
+              "title": "PersistentMemoryConfig",
+              "symbol": "PersistentMemoryConfig",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "enabled",
+                  "type": "bool",
+                  "value": "False"
+                },
+                {
+                  "name": "auto_save",
+                  "type": "bool",
+                  "value": "True"
+                },
+                {
+                  "name": "max_memories",
+                  "type": "int",
+                  "value": "5",
+                  "doc": "How many memories get injected per iteration."
+                },
+                {
+                  "name": "memory_dir",
+                  "type": "str",
+                  "doc": "Empty means <workspace>/.claude/memory/."
+                }
+              ],
+              "sources": [
+                {
+                  "path": "config.py",
+                  "line": 58,
+                  "endLine": 71
+                }
+              ],
+              "code": "class PersistentMemoryConfig(BaseModel):\n    \"\"\"Persistent memory settings for cross-session knowledge retention.\"\"\"\n\n    enabled: bool = False\n    \"\"\"Enable persistent memory.\"\"\"\n\n    auto_save: bool = True\n    \"\"\"Automatically save memories from conversations.\"\"\"\n\n    max_memories: int = 5\n    \"\"\"Maximum number of relevant memories to inject into context.\"\"\"\n\n    memory_dir: str = \"\"\n    \"\"\"Custom memory directory path. If empty, uses ``<workspace>/.claude/memory/``.\"\"\""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "runner",
+      "pos": [
+        470,
+        240
+      ],
+      "sublabel": "AgentRunner",
+      "tag": "core loop",
+      "summary": "The LLM tool-calling loop: iterate, execute tools, feed results back.",
+      "detail": {
+        "kind": "diagram",
+        "title": "runner.py — AgentRunner",
+        "subtitle": "The agent loop and everything AgentRunner wires together at construction time.",
+        "components": [
+          {
+            "id": "init",
+            "type": "backend",
+            "label": "__init__",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Resolves workspace, provider, skills, tool registry, then hooks.",
+            "detail": {
+              "kind": "code",
+              "title": "__init__",
+              "symbol": "AgentRunner.__init__",
+              "language": "python",
+              "signature": "def __init__(self, config: Config, *, skills_dir: Path | str | None = None, hook: AgentHook | None = None) -> None",
+              "fields": [
+                {
+                  "name": "_config",
+                  "type": "Config",
+                  "doc": "Root configuration object."
+                },
+                {
+                  "name": "_workspace",
+                  "type": "Path",
+                  "doc": "Resolved working directory, created if absent."
+                },
+                {
+                  "name": "_provider",
+                  "type": "LLMProvider",
+                  "doc": "OpenAI-compatible chat client."
+                },
+                {
+                  "name": "_registry",
+                  "type": "ToolRegistry",
+                  "doc": "Name → Tool map exposed to the LLM."
+                },
+                {
+                  "name": "_deps_ready",
+                  "type": "bool",
+                  "doc": "Guards one-shot skill dependency install."
+                },
+                {
+                  "name": "_last_run_usage",
+                  "type": "_TokenAccumulator",
+                  "doc": "Per-run token counters."
+                }
+              ],
+              "notes": [
+                "Hook setup order matters: memory hooks wrap the user hook, so the composite runs memory first."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 72,
+                  "endLine": 98
+                }
+              ],
+              "code": "    def __init__(\n        self,\n        config: Config,\n        *,\n        skills_dir: Path | str | None = None,\n        hook: AgentHook | None = None,\n    ) -> None:\n        self._config = config\n        self._workspace = config.get_workspace()\n        self._workspace.mkdir(parents=True, exist_ok=True)\n        self._provider = LLMProvider(config)\n        self._registry = ToolRegistry()\n        self._deps_ready = False\n        self._last_run_usage = _TokenAccumulator()\n\n        # resolve skills directories\n        builtin = _BUILTIN_SKILLS_DIR\n        if skills_dir is not None:\n            custom = Path(skills_dir).expanduser().resolve()\n            self._skills = load_skills(self._workspace, builtin, extra_dirs=[custom])\n        else:\n            self._skills = load_skills(self._workspace, builtin)\n\n        self._register_tools()\n\n        # Hook setup: compression + persistent memory\n        self._hook = self._setup_hooks(hook)"
+            }
+          },
+          {
+            "id": "setup-hooks",
+            "type": "security",
+            "label": "_setup_hooks",
+            "pos": [
+              276,
+              40
+            ],
+            "summary": "Wraps optional hooks into one composite.",
+            "detail": {
+              "kind": "code",
+              "title": "_setup_hooks",
+              "symbol": "AgentRunner._setup_hooks",
+              "language": "python",
+              "notes": [
+                "A single hook is returned bare rather than wrapped, so callers keep identity."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 100,
+                  "endLine": 141
+                }
+              ],
+              "code": "    def _setup_hooks(self, hook: AgentHook | None) -> AgentHook | None:\n        \"\"\"Set up lifecycle hooks: compression + persistent memory.\n\n        Wraps the provided hook with compression and memory hooks based on\n        config.\n        \"\"\"\n        hooks: list[AgentHook] = []\n\n        # Persistent memory hook\n        pm_cfg = self._config.persistent_memory\n        if pm_cfg.enabled:\n            if pm_cfg.memory_dir:\n                base = Path(pm_cfg.memory_dir)\n            else:\n                base = self._workspace / \".claude\"\n            store = MemoryStore(base)\n            mem_hook = PersistentMemoryHook(\n                store,\n                enabled=True,\n                max_memories=pm_cfg.max_memories,\n                auto_save=pm_cfg.auto_save,\n            )\n            hooks.append(mem_hook)\n\n        # Memory compression hook\n        mc_cfg = self._config.memory\n        if mc_cfg.enabled:\n            compressor = MemoryCompressor(\n                summarize_func=self._make_summarizer(),\n            )\n            mc_hook = MemoryCompressionHook.from_config(compressor, mc_cfg)\n            hooks.append(mc_hook)\n\n        # User-provided hook\n        if hook is not None:\n            hooks.append(hook)\n\n        if not hooks:\n            return None\n        if len(hooks) == 1:\n            return hooks[0]\n        return CompositeHook(hooks)"
+            }
+          },
+          {
+            "id": "register-tools",
+            "type": "backend",
+            "label": "_register_tools",
+            "pos": [
+              512,
+              40
+            ],
+            "summary": "Registers built-in tools conditionally on config.",
+            "detail": {
+              "kind": "code",
+              "title": "_register_tools",
+              "symbol": "AgentRunner._register_tools",
+              "language": "python",
+              "notes": [
+                "run_script is only registered when at least one skill declares pip requirements."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 189,
+                  "endLine": 213
+                }
+              ],
+              "code": "    def _register_tools(self) -> None:\n        \"\"\"Register built-in tools based on config.\"\"\"\n        ws = self._workspace\n        ec = self._config.exec\n\n        self._registry.register(ReadFileTool(ws))\n        self._registry.register(WriteFileTool(ws))\n        self._registry.register(ListDirTool(ws))\n\n        # register load_skill for progressive skill loading\n        if self._skills:\n            self._registry.register(LoadSkillTool(self._skills))\n\n        if ec.enable:\n            self._registry.register(\n                ExecTool(\n                    workspace=ws,\n                    timeout=ec.timeout,\n                    deny_patterns=ec.deny_patterns,\n                )\n            )\n\n        # register run_script if any skill has pip dependencies\n        if any(s.available and s.requires.pip for s in self._skills):\n            self._registry.register(RunScriptTool(ws, self._skills, timeout=ec.timeout * 2))"
+            }
+          },
+          {
+            "id": "sysprompt",
+            "type": "backend",
+            "label": "_build_system_prompt",
+            "pos": [
+              748,
+              40
+            ],
+            "summary": "Assembles the three-level progressive disclosure prompt.",
+            "detail": {
+              "kind": "code",
+              "title": "_build_system_prompt",
+              "symbol": "AgentRunner._build_system_prompt",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 227,
+                  "endLine": 267
+                }
+              ],
+              "code": "    def _build_system_prompt(self) -> str:\n        \"\"\"Assemble the system prompt with progressive skill loading.\n\n        Progressive disclosure pattern (3 levels):\n        1. Always-on skills: full SKILL.md body injected directly\n        2. Other skills: name + description + path in summary (agent reads on demand)\n        3. Bundled resources: agent reads referenced scripts/assets as needed\n        \"\"\"\n        parts = [SYSTEM_PROMPT]\n\n        # Level 1: inject always-on skills with {SKILL_DIR} replaced\n        always = get_always_skills(self._skills)\n        if always:\n            parts.append(\"# Active Skills\\n\")\n            for s in always:\n                skill_dir = str(s.path.parent.resolve())\n                content = s.content.replace(\"{SKILL_DIR}\", skill_dir)\n                parts.append(content)\n\n        # Level 2: inject skills summary with progressive loading instructions\n        summary = build_skills_summary(self._skills)\n        if summary:\n            parts.append(\n                \"# Skills\\n\\n\"\n                \"The following skills extend your capabilities. To use a skill, \"\n                \"call the `load_skill` tool with the skill name. The skill file \"\n                \"contains detailed instructions and scripts you can execute.\\n\\n\"\n                \"When the user's request matches a skill's description, load it \"\n                \"immediately before proceeding.\\n\\n\"\n                \"Unavailable skills need dependencies installed first.\\n\\n\"\n                f\"{summary}\"\n            )\n\n        # Level 3: inject skill directories for subresource access\n        for s in self._skills:\n            if s.available:\n                skill_dir = str(s.path.parent.resolve())\n                parts.append(f\"Skill '{s.name}' directory: {skill_dir}\")\n\n        parts.append(f\"Workspace: {self._workspace}\")\n        return \"\\n\\n\".join(parts)"
+            }
+          },
+          {
+            "id": "run-sync",
+            "type": "backend",
+            "variant": "emphasis",
+            "label": "_run_sync",
+            "pos": [
+              40,
+              200
+            ],
+            "summary": "Non-streaming tool-calling loop.",
+            "detail": {
+              "kind": "code",
+              "title": "_run_sync",
+              "symbol": "AgentRunner._run_sync",
+              "language": "python",
+              "signature": "async def _run_sync(self, user_message: str) -> str",
+              "doc": "The core agent loop: call the model, execute any tool calls, feed results back, and repeat until the model answers without tools or max_iterations is reached.",
+              "notes": [
+                "Iteration budget comes from config.max_iterations; exhausting it returns an error string rather than raising.",
+                "Tool failures are captured into tool_errors but do not break the loop — the model sees the error text as a tool result."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 284,
+                  "endLine": 358
+                }
+              ],
+              "code": "    async def _run_sync(self, user_message: str) -> str:\n        \"\"\"Non-streaming agent loop. Returns the final response string.\"\"\"\n        await self._ensure_deps()\n        self._last_run_usage.reset()\n        messages: list[dict[str, Any]] = [\n            {\"role\": \"system\", \"content\": self._build_system_prompt()},\n            {\"role\": \"user\", \"content\": user_message},\n        ]\n        tools = self._registry.get_definitions()\n\n        for i in range(self._config.max_iterations):\n            context = AgentHookContext(iteration=i, messages=messages)\n\n            if self._hook:\n                await self._hook.before_iteration(context)\n\n            response = await self._provider.chat(messages, tools)\n            u = response.usage\n            self._last_run_usage.add(u.prompt_tokens, u.completion_tokens, u.total_tokens)\n            context.response = response\n            context.tool_calls = list(response.tool_calls)\n\n            if not response.has_tool_calls:\n                final = response.content\n                if self._hook:\n                    await self._hook.after_iteration(context)\n                    final = self._hook.finalize_content(context, final) or final\n                return final or \"(Agent completed without generating a response.)\"\n\n            assistant_msg: dict[str, Any] = {\"role\": \"assistant\", \"content\": response.content or None}\n            assistant_msg[\"tool_calls\"] = [\n                {\n                    \"id\": tc.id,\n                    \"type\": \"function\",\n                    \"function\": {\n                        \"name\": tc.name,\n                        \"arguments\": json.dumps(tc.arguments, ensure_ascii=False),\n                    },\n                }\n                for tc in response.tool_calls\n            ]\n            messages.append(assistant_msg)\n\n            if self._hook:\n                await self._hook.before_execute_tools(context)\n\n            tool_results: list[str] = []\n            tool_errors: list[str] = []\n            for tc in context.tool_calls:\n                args_preview = str(tc.arguments)[:200]\n                console.print(f\"  [bold blue]CALL {tc.name}[/bold blue]({args_preview})\")\n                result = await self._registry.execute(tc.name, tc.arguments)\n                result_preview = (result[:300].replace(\"\\n\", \" \") if result else \"(empty)\")\n                try:\n                    print(f\"    -> {result_preview}\")\n                except UnicodeEncodeError:\n                    enc = sys.stdout.encoding or \"utf-8\"\n                    safe = result_preview.encode(enc, errors=\"replace\").decode(enc, errors=\"replace\")\n                    print(f\"    -> {safe}\")\n                tool_results.append(result)\n                if result.startswith(\"Error\"):\n                    tool_errors.append(result)\n                messages.append({\n                    \"role\": \"tool\",\n                    \"tool_call_id\": tc.id,\n                    \"content\": result,\n                })\n\n            context.tool_results = tool_results\n            context.tool_errors = tool_errors\n\n            if self._hook:\n                await self._hook.after_iteration(context)\n\n        return \"Error: maximum tool iterations reached.\""
+            }
+          },
+          {
+            "id": "run-streaming",
+            "type": "backend",
+            "variant": "emphasis",
+            "label": "_run_streaming",
+            "pos": [
+              276,
+              200
+            ],
+            "summary": "Streaming variant of the same loop.",
+            "detail": {
+              "kind": "code",
+              "title": "_run_streaming",
+              "symbol": "AgentRunner._run_streaming",
+              "language": "python",
+              "signature": "async def _run_streaming(self, user_message: str) -> AsyncIterator[str]",
+              "notes": [
+                "Yields content deltas; tool execution still happens between chunks, not interleaved."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 360,
+                  "endLine": 446
+                }
+              ],
+              "code": "    async def _run_streaming(self, user_message: str) -> AsyncIterator[str]:\n        \"\"\"Streaming agent loop. Yields content chunks.\"\"\"\n        await self._ensure_deps()\n        self._last_run_usage.reset()\n        messages: list[dict[str, Any]] = [\n            {\"role\": \"system\", \"content\": self._build_system_prompt()},\n            {\"role\": \"user\", \"content\": user_message},\n        ]\n        tools = self._registry.get_definitions()\n\n        for i in range(self._config.max_iterations):\n            context = AgentHookContext(iteration=i, messages=messages)\n\n            if self._hook:\n                await self._hook.before_iteration(context)\n\n            response: LLMResponse | None = None\n            content_parts: list[str] = []\n\n            async for chunk_resp in self._provider.stream_chat(messages, tools):\n                response = chunk_resp\n                if chunk_resp.content:\n                    new = chunk_resp.content[len(\"\".join(content_parts)):]\n                    if new:\n                        content_parts.append(new)\n                        yield new\n                if chunk_resp.finish_reason:\n                    break\n\n            if response:\n                u = response.usage\n                self._last_run_usage.add(u.prompt_tokens, u.completion_tokens, u.total_tokens)\n                context.response = response\n                context.tool_calls = list(response.tool_calls)\n\n            if not response or not response.has_tool_calls:\n                if self._hook:\n                    await self._hook.after_iteration(context)\n                    self._hook.finalize_content(context, response.content if response else \"\")\n                return\n\n            assistant_msg: dict[str, Any] = {\"role\": \"assistant\", \"content\": response.content or None}\n            assistant_msg[\"tool_calls\"] = [\n                {\n                    \"id\": tc.id,\n                    \"type\": \"function\",\n                    \"function\": {\n                        \"name\": tc.name,\n                        \"arguments\": json.dumps(tc.arguments, ensure_ascii=False),\n                    },\n                }\n                for tc in response.tool_calls\n            ]\n            messages.append(assistant_msg)\n\n            if self._hook:\n                await self._hook.before_execute_tools(context)\n\n            tool_results: list[str] = []\n            tool_errors: list[str] = []\n            for tc in context.tool_calls:\n                args_preview = str(tc.arguments)[:200]\n                console.print(f\"  [bold blue]CALL {tc.name}[/bold blue]({args_preview})\")\n                result = await self._registry.execute(tc.name, tc.arguments)\n                result_preview = (result[:300].replace(\"\\n\", \" \") if result else \"(empty)\")\n                try:\n                    print(f\"    -> {result_preview}\")\n                except UnicodeEncodeError:\n                    enc = sys.stdout.encoding or \"utf-8\"\n                    safe = result_preview.encode(enc, errors=\"replace\").decode(enc, errors=\"replace\")\n                    print(f\"    -> {safe}\")\n                tool_results.append(result)\n                if result.startswith(\"Error\"):\n                    tool_errors.append(result)\n                messages.append({\n                    \"role\": \"tool\",\n                    \"tool_call_id\": tc.id,\n                    \"content\": result,\n                })\n\n            context.tool_results = tool_results\n            context.tool_errors = tool_errors\n\n            if self._hook:\n                await self._hook.after_iteration(context)\n\n        yield \"Error: maximum tool iterations reached.\""
+            }
+          },
+          {
+            "id": "ensure-deps",
+            "type": "cloud",
+            "label": "_ensure_deps",
+            "pos": [
+              512,
+              200
+            ],
+            "summary": "One-shot async skill dependency install.",
+            "detail": {
+              "kind": "code",
+              "title": "_ensure_deps",
+              "symbol": "AgentRunner._ensure_deps",
+              "language": "python",
+              "notes": [
+                "Re-registers run_script afterwards in case skills only became available post-install."
+              ],
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 215,
+                  "endLine": 225
+                }
+              ],
+              "code": "    async def _ensure_deps(self) -> None:\n        \"\"\"Lazily ensure skill dependencies are ready (async, runs once).\"\"\"\n        if self._deps_ready:\n            return\n        self._deps_ready = True\n        await ensure_skill_deps(self._skills)\n        # re-register run_script in case skills became available after deps installed\n        if any(s.available and s.requires.pip for s in self._skills):\n            ec = self._config.exec\n            if not self._registry.get(\"run_script\"):\n                self._registry.register(RunScriptTool(self._workspace, self._skills, timeout=ec.timeout * 2))"
+            }
+          },
+          {
+            "id": "run-interactive",
+            "type": "frontend",
+            "label": "run_interactive",
+            "pos": [
+              748,
+              200
+            ],
+            "summary": "REPL loop for terminal use.",
+            "detail": {
+              "kind": "code",
+              "title": "run_interactive",
+              "symbol": "AgentRunner.run_interactive",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "runner.py",
+                  "line": 448,
+                  "endLine": 490
+                }
+              ],
+              "code": "    async def run_interactive(self) -> None:\n        \"\"\"Run an interactive chat session.\"\"\"\n        await self._ensure_deps()\n        console.print(\"[bold green]toolsclaw[/bold green] - interactive mode (type 'exit' to quit)\")\n        console.print(f\"Workspace: {self._workspace}\\n\")\n\n        messages: list[dict[str, Any]] = [\n            {\"role\": \"system\", \"content\": self._build_system_prompt()},\n        ]\n        tools = self._registry.get_definitions()\n\n        while True:\n            try:\n                user_input = input(\"You: \").strip()\n            except (EOFError, KeyboardInterrupt):\n                console.print(\"\\n[dim]Bye![/dim]\")\n                break\n\n            if not user_input:\n                continue\n            if user_input.lower() in (\"exit\", \"quit\", \"/exit\", \"/quit\"):\n                console.print(\"[dim]Bye![/dim]\")\n                break\n\n            messages.append({\"role\": \"user\", \"content\": user_input})\n\n            for i in range(self._config.max_iterations):\n                context = AgentHookContext(iteration=i, messages=messages)\n\n                if self._hook:\n                    await self._hook.before_iteration(context)\n\n                # Log compression if it happened\n                if self._hook and hasattr(self._hook, \"compression_count\"):\n                    from toolsclaw.hook import CompositeHook, MemoryCompressionHook\n                    mh = self._find_memory_hook(self._hook)\n                    if mh and mh.compression_count > 0 and mh.last_compressed_tokens > 0:\n                        console.print(\n                            f\"  [dim]🧠 Memory compressed: \"\n                            f\"{mh.compression_count}x, \"\n                            f\"last saved ~{mh.last_compressed_tokens} tokens[/dim]\"\n                        )\n                        mh.last_compressed_tokens = 0  # only log once per compression"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "c1",
+            "from": "init",
+            "to": "setup-hooks",
+            "label": "wires",
+            "variant": "emphasis"
+          },
+          {
+            "id": "c2",
+            "from": "init",
+            "to": "register-tools",
+            "label": "wires"
+          },
+          {
+            "id": "c3",
+            "from": "setup-hooks",
+            "to": "sysprompt",
+            "label": "hook chain"
+          },
+          {
+            "id": "c4",
+            "from": "run-sync",
+            "to": "ensure-deps",
+            "label": "awaits first"
+          },
+          {
+            "id": "c5",
+            "from": "run-sync",
+            "to": "register-tools",
+            "label": "reads schemas"
+          },
+          {
+            "id": "c6",
+            "from": "run-streaming",
+            "to": "ensure-deps",
+            "label": "awaits first"
+          },
+          {
+            "id": "c7",
+            "from": "run-interactive",
+            "to": "run-sync",
+            "label": "drives",
+            "variant": "dashed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hook",
+      "type": "security",
+      "label": "hook",
+      "pos": [
+        470,
+        480
+      ],
+      "sublabel": "lifecycle hooks",
+      "tag": "4 hooks",
+      "summary": "before/after callbacks around each iteration, plus memory and SDK capture hooks.",
+      "detail": {
+        "kind": "diagram",
+        "title": "hook.py — lifecycle",
+        "components": [
+          {
+            "id": "agent-hook",
+            "type": "security",
+            "label": "AgentHook",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Base class with four overridable methods.",
+            "detail": {
+              "kind": "code",
+              "title": "AgentHook",
+              "symbol": "AgentHook",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "before_iteration",
+                  "signature": "async def before_iteration(self, context: AgentHookContext) -> None",
+                  "doc": "Called before each LLM request."
+                },
+                {
+                  "name": "before_execute_tools",
+                  "signature": "async def before_execute_tools(self, context: AgentHookContext) -> None",
+                  "doc": "After the model returns tool calls, before execution."
+                },
+                {
+                  "name": "after_iteration",
+                  "signature": "async def after_iteration(self, context: AgentHookContext) -> None",
+                  "doc": "After tool results are collected."
+                },
+                {
+                  "name": "finalize_content",
+                  "signature": "def finalize_content(self, context, content: str | None) -> str | None",
+                  "doc": "Post-processes the final response text."
+                }
+              ],
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 35,
+                  "endLine": 56
+                }
+              ],
+              "code": "class AgentHook:\n    \"\"\"Base class for agent lifecycle hooks.\n\n    Override any method to inject behavior at that point in the agent loop.\n    \"\"\"\n\n    async def before_iteration(self, context: AgentHookContext) -> None:\n        \"\"\"Called before each LLM request.\"\"\"\n        pass\n\n    async def before_execute_tools(self, context: AgentHookContext) -> None:\n        \"\"\"Called after LLM responds with tool calls, before execution.\"\"\"\n        pass\n\n    async def after_iteration(self, context: AgentHookContext) -> None:\n        \"\"\"Called after tool results are collected (or LLM returns final answer).\"\"\"\n        pass\n\n    def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:\n        \"\"\"Post-process the final response text. Return the modified content.\"\"\"\n        return content"
+            }
+          },
+          {
+            "id": "ctx",
+            "type": "cloud",
+            "label": "AgentHookContext",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Mutable per-iteration state handed to every hook.",
+            "detail": {
+              "kind": "code",
+              "title": "AgentHookContext",
+              "symbol": "AgentHookContext",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "iteration",
+                  "type": "int"
+                },
+                {
+                  "name": "messages",
+                  "type": "list[dict[str, Any]]"
+                },
+                {
+                  "name": "response",
+                  "type": "LLMResponse | None"
+                },
+                {
+                  "name": "tool_calls",
+                  "type": "list[ToolCallRequest]"
+                },
+                {
+                  "name": "tool_results",
+                  "type": "list[str]"
+                },
+                {
+                  "name": "tool_errors",
+                  "type": "list[str]"
+                },
+                {
+                  "name": "final_content",
+                  "type": "str | None"
+                }
+              ],
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 23,
+                  "endLine": 33
+                }
+              ],
+              "code": "class AgentHookContext:\n    \"\"\"Mutable per-iteration state exposed to hooks.\"\"\"\n\n    iteration: int\n    messages: list[dict[str, Any]]\n    response: LLMResponse | None = None\n    tool_calls: list[ToolCallRequest] = field(default_factory=list)\n    tool_results: list[str] = field(default_factory=list)\n    tool_errors: list[str] = field(default_factory=list)\n    final_content: str | None = None"
+            }
+          },
+          {
+            "id": "composite",
+            "type": "backend",
+            "label": "CompositeHook",
+            "pos": [
+              560,
+              40
+            ],
+            "summary": "Fans one lifecycle call out to many hooks in order.",
+            "detail": {
+              "kind": "code",
+              "title": "CompositeHook",
+              "symbol": "CompositeHook",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 75,
+                  "endLine": 100
+                }
+              ],
+              "code": "class CompositeHook(AgentHook):\n    \"\"\"Fan-out hook that delegates to an ordered list of hooks.\"\"\"\n\n    __slots__ = (\"_hooks\",)\n\n    def __init__(self, hooks: list[AgentHook]) -> None:\n        super().__init__()\n        self._hooks = list(hooks)\n\n    async def before_iteration(self, context: AgentHookContext) -> None:\n        for h in self._hooks:\n            await h.before_iteration(context)\n\n    async def before_execute_tools(self, context: AgentHookContext) -> None:\n        for h in self._hooks:\n            await h.before_execute_tools(context)\n\n    async def after_iteration(self, context: AgentHookContext) -> None:\n        for h in self._hooks:\n            await h.after_iteration(context)\n\n    def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:\n        for h in self._hooks:\n            content = h.finalize_content(context, content)\n        return content"
+            }
+          },
+          {
+            "id": "mem-compress",
+            "type": "backend",
+            "label": "MemoryCompressionHook",
+            "pos": [
+              40,
+              230
+            ],
+            "summary": "Compresses history when the token estimate crosses the threshold.",
+            "detail": {
+              "kind": "code",
+              "title": "MemoryCompressionHook",
+              "symbol": "MemoryCompressionHook",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 102,
+                  "endLine": 186
+                }
+              ],
+              "code": "class MemoryCompressionHook(AgentHook):\n    \"\"\"Hook that automatically compresses conversation history when it\n    exceeds the configured token threshold.\n\n    Triggers on ``before_iteration`` so the LLM always sees a\n    context-sized message list.\n\n    Usage::\n\n        compressor = MemoryCompressor(summarize_func=my_summarizer)\n        hook = MemoryCompressionHook(compressor, threshold_tokens=80_000)\n        runner = AgentRunner(config, hook=hook)\n    \"\"\"\n\n    def __init__(\n        self,\n        compressor: MemoryCompressor,\n        *,\n        enabled: bool = True,\n        threshold_tokens: int = 80_000,\n        strategy: str = \"hybrid\",\n        target_ratio: float = 0.5,\n        min_rounds_to_keep: int = 3,\n        tool_result_max_chars: int = 300,\n    ) -> None:\n        super().__init__()\n        self._compressor = compressor\n        self._enabled = enabled\n        self._threshold_tokens = threshold_tokens\n        self._strategy = strategy\n        self._target_ratio = target_ratio\n        self._min_rounds_to_keep = min_rounds_to_keep\n        self._tool_result_max_chars = tool_result_max_chars\n\n        self.compression_count: int = 0\n        \"\"\"Number of times compression has been triggered.\"\"\"\n\n        self.last_compressed_tokens: int = 0\n        \"\"\"Estimated token count before the last compression.\"\"\"\n\n    async def before_iteration(self, context: AgentHookContext) -> None:\n        \"\"\"Check message size and compress if needed.\"\"\"\n        if not self._enabled:\n            return\n\n        if context.iteration == 0:\n            # Don't compress on the first iteration (no history yet)\n            return\n\n        msgs = context.messages\n        if not self._compressor.should_compress(msgs, self._threshold_tokens):\n            return\n\n        self.last_compressed_tokens = self._compressor.estimate_tokens(msgs)\n        self.compression_count += 1\n\n        compressed = await self._compressor.compress(\n            msgs,\n            strategy=self._strategy,\n            target_ratio=self._target_ratio,\n            min_rounds_to_keep=self._min_rounds_to_keep,\n            tool_result_max_chars=self._tool_result_max_chars,\n        )\n\n        # Replace in-place so the runner's original reference is updated\n        context.messages.clear()\n        context.messages.extend(compressed)\n\n    @classmethod\n    def from_config(\n        cls,\n        compressor: MemoryCompressor,\n        config: Any,  # MemoryCompressionConfig\n    ) -> MemoryCompressionHook:\n        \"\"\"Create a hook from a config object.\"\"\"\n        return cls(\n            compressor,\n            enabled=config.enabled,\n            threshold_tokens=config.threshold_tokens,\n            strategy=config.strategy,\n            target_ratio=config.target_ratio,\n            min_rounds_to_keep=config.min_rounds_to_keep,\n            tool_result_max_chars=config.tool_result_max_chars,\n        )"
+            }
+          },
+          {
+            "id": "persistent-mem",
+            "type": "database",
+            "label": "PersistentMemoryHook",
+            "pos": [
+              300,
+              230
+            ],
+            "summary": "Recalls relevant memories before each iteration and auto-saves after.",
+            "detail": {
+              "kind": "code",
+              "title": "PersistentMemoryHook",
+              "symbol": "PersistentMemoryHook",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 188,
+                  "endLine": 490
+                }
+              ],
+              "code": "class PersistentMemoryHook(AgentHook):\n    \"\"\"Hook that loads relevant memories into the system prompt and\n    auto-saves important facts after each iteration.\n\n    This hook implements a persistent memory system similar to Claude Code's\n    file-based memory: memories are stored as markdown files with frontmatter\n    in the workspace's ``.claude/memory/`` directory.\n\n    The hook:\n\n    1. **Before each iteration**: searches for memories relevant to the\n       current conversation and injects a memory context block into the\n       messages.\n    2. **After each iteration**: extracts key facts from the exchange and\n       saves them as memories.\n\n    Args:\n        store: Initialised MemoryStore instance.\n        enabled: Whether this hook is active.\n        max_memories: Maximum number of relevant memories to inject.\n        auto_save: Whether to auto-save memories after each iteration.\n        dedup_threshold: Minimum content length difference fraction (0.0-1.0)\n            to consider a new memory worth saving. Higher = less dedup.\n    \"\"\"\n\n    def __init__(\n        self,\n        store: MemoryStore,\n        *,\n        enabled: bool = True,\n        max_memories: int = 5,\n        auto_save: bool = True,\n        dedup_threshold: float = 0.3,\n    ) -> None:\n        super().__init__()\n        self._store = store\n        self._enabled = enabled\n        self._max_memories = max_memories\n        self._auto_save = auto_save\n        self._dedup_threshold = dedup_threshold\n\n        self.memories_loaded: int = 0\n        \"\"\"Number of times relevant memories were loaded into context.\"\"\"\n\n        self.memories_saved: int = 0\n        \"\"\"Number of auto-saved memories.\"\"\"\n\n        self._injected_this_run: bool = False\n        \"\"\"Track whether we've already injected memories this run.\"\"\"\n\n        self._saved_topics: set[str] = set()\n        \"\"\"Track topics already saved this run to avoid duplicates.\"\"\"\n\n    # -- public helpers ---------------------------------------------------\n\n    @property\n    def store(self) -> MemoryStore:\n        return self._store\n\n    # -- AgentHook overrides ----------------------------------------------\n\n    async def before_iteration(self, context: AgentHookContext) -> None:\n        \"\"\"Inject relevant memories into the system prompt.\"\"\"\n        if not self._enabled:\n            return\n\n        # Only inject once per run (on first iteration)\n        if self._injected_this_run:\n            return\n        self._injected_this_run = True\n\n        # Build a query from the current user messages\n        query = self._build_query(context)\n        if not query:\n            return\n\n        memories = self._store.search(query, max_results=self._max_memories)\n        if not memories:\n            return\n\n        # Inject as a system-level memory context block\n        context_block = self._format_memory_context(memories)\n        if not context_block:\n            return\n\n        # Prepend the memory context to the system message\n        for i, msg in enumerate(context.messages):\n            if msg.get(\"role\") == \"system\":\n                existing = msg.get(\"content\", \"\")\n                if isinstance(existing, str):\n                    msg[\"content\"] = existing + \"\\n\\n\" + context_block\n                break\n\n        self.memories_loaded += len(memories)\n        logger.info(\n            \"PersistentMemoryHook: injected %d memories into context\",\n            len(memories),\n        )\n\n    async def after_iteration(self, context: AgentHookContext) -> None:\n        \"\"\"Auto-save important facts after each iteration.\"\"\"\n        if not self._enabled or not self._auto_save:\n            return\n\n        # 1. Save assistant's final response as a project memory\n        if context.final_content and len(context.final_content) > 100:\n            self._save_response_memory(context)\n\n        # 2. Extract tool usage patterns\n        if context.tool_calls:\n            self._save_tool_memories(context)\n\n        # 3. Save user query topics as feedback memories\n        self._save_user_query_memories(context)\n\n    # -- internal helpers -------------------------------------------------\n\n    def _build_query(self, context: AgentHookContext) -> str:\n        \"\"\"Build a search query from the current conversation context.\"\"\"\n        parts: list[str] = []\n        for msg in context.messages:\n            if msg.get(\"role\") == \"user\":\n                content = msg.get(\"content\", \"\")\n                if isinstance(content, str) and content:\n                    parts.append(content[:500])\n        return \" \".join(parts[-3:])  # last 3 user messages\n\n    def _format_memory_context(self, memories: list[Memory]) -> str:\n        \"\"\"Format relevant memories as a context block for the system prompt.\"\"\"\n        if not memories:\n            return \"\"\n\n        lines = [\"## Relevant Memories\\n\"]\n        for mem in memories:\n            tag = f\"[{mem.type}]\"\n            lines.append(f\"### {tag} {mem.name}\")\n            if mem.description:\n                lines.append(f\"_{mem.description}_\")\n            lines.append(\"\")\n            lines.append(mem.content)\n            if mem.links:\n                linked = \", \".join(f\"[[{l}]]\" for l in mem.links)\n                lines.append(f\"Related: {linked}\")\n            lines.append(\"\")\n\n        return \"\\n\".join(lines)\n\n    def _save_response_memory(self, context: AgentHookContext) -> None:\n        \"\"\"Save the assistant's response as a memory, deduplicating against\n        existing memories with the same topic.\"\"\"\n        content = context.final_content or \"\"\n        if not content:\n            return\n\n        # Extract a topic key from the first line or the user's query\n        topic = self._extract_topic_key(content, context)\n        if not topic or topic in self._saved_topics:\n            return\n\n        # Check if a similar memory already exists\n        existing = self._store.search(topic, max_results=1)\n        if existing:\n            prev = existing[0]\n            sim = self._content_similarity(content, prev.content)\n            if sim > (1.0 - self._dedup_threshold):\n                logger.debug(\n                    \"PersistentMemoryHook: skipping duplicate memory (sim=%.2f): %s\",\n                    sim, topic,\n                )\n                return\n\n        self._saved_topics.add(topic)\n        safe_name = self._sanitise_name(topic[:40])\n\n        self._auto_save_memory(\n            name=safe_name,\n            description=f\"Assistant response about {topic[:60]}\",\n            type=\"reference\",\n            content=content,\n        )\n\n    def _save_tool_memories(self, context: AgentHookContext) -> None:\n        \"\"\"Save tool usage patterns as project memories, grouped by task.\"\"\"\n        tool_names = sorted({tc.name for tc in context.tool_calls})\n        if not tool_names:\n            return\n\n        # Group tool names into a topic key\n        topic_key = \"-\".join(tool_names[:3])\n        if topic_key in self._saved_topics:\n            return\n        self._saved_topics.add(topic_key)\n\n        # Get user query context for better description\n        user_query = \"\"\n        for msg in reversed(context.messages):\n            if msg.get(\"role\") == \"user\":\n                user_query = (msg.get(\"content\", \"\") or \"\")[:120]\n                break\n\n        mem_name = f\"tool-pattern-{topic_key}\"\n        desc = f\"Used tools: {', '.join(tool_names)}\"\n        if user_query:\n            desc += f\" — {user_query}\"\n\n        self._auto_save_memory(\n            name=mem_name,\n            description=desc,\n            type=\"project\",\n            content=(\n                f\"Tool pattern: `{'`, `'.join(tool_names)}`\\n\\n\"\n                f\"User query: {user_query}\\n\\n\"\n                f\"Tools called: {len(context.tool_calls)} total\"\n            ),\n        )\n\n    def _save_user_query_memories(self, context: AgentHookContext) -> None:\n        \"\"\"Save user query topics as feedback memories.\"\"\"\n        for msg in context.messages:\n            if msg.get(\"role\") != \"user\":\n                continue\n            content = msg.get(\"content\", \"\")\n            if not isinstance(content, str) or len(content) < 50:\n                continue\n\n            topic = self._extract_topic_key(content, context)\n            if not topic or topic in self._saved_topics:\n                continue\n            self._saved_topics.add(topic)\n\n            safe_name = self._sanitise_name(f\"user-query-{topic[:30]}\")\n            self._auto_save_memory(\n                name=safe_name,\n                description=f\"User asked about: {topic[:80]}\",\n                type=\"feedback\",\n                content=content[:500],\n            )\n\n    @staticmethod\n    def _extract_topic_key(\n        content: str, context: AgentHookContext | None = None,\n    ) -> str:\n        \"\"\"Extract a short topic key from content.\n\n        Uses the first substantive line or the first 50 chars of content.\n        \"\"\"\n        # Try first non-empty line\n        for line in content.split(\"\\n\"):\n            stripped = line.strip().strip(\"#* \\t\")\n            if stripped and len(stripped) > 10:\n                return stripped[:80]\n        # Fallback: first 50 chars\n        return content.strip()[:80]\n\n    @staticmethod\n    def _content_similarity(a: str, b: str) -> float:\n        \"\"\"Compute a simple content similarity score (0.0-1.0).\n\n        Uses token overlap (intersection / union of word sets).\n        \"\"\"\n        words_a = set(a.lower().split())\n        words_b = set(b.lower().split())\n        if not words_a or not words_b:\n            return 0.0\n        intersection = words_a & words_b\n        union = words_a | words_b\n        return len(intersection) / len(union)\n\n    @staticmethod\n    def _sanitise_name(name: str) -> str:\n        \"\"\"Normalise a string to a valid kebab-case slug.\"\"\"\n        safe = name.strip().lower()\n        safe = safe.replace(\"_\", \"-\").replace(\" \", \"-\")\n        safe = re.sub(r\"[^a-z0-9-]\", \"\", safe)\n        safe = re.sub(r\"-{2,}\", \"-\", safe).strip(\"-\")\n        return safe[:80] or \"unnamed\"\n\n    def _auto_save_memory(\n        self,\n        name: str,\n        description: str,\n        type: str,\n        content: str,\n    ) -> None:\n        \"\"\"Save a memory using update_or_create (silently).\n\n        Uses the store's upsert pattern so repeated saves with the same\n        name merge content rather than creating duplicates.\n        \"\"\"\n        if not name:\n            return\n\n        try:\n            self._store.update_or_create(\n                name=name,\n                description=description,\n                type=type,\n                content=content,\n                merge_content=True,\n            )\n            self.memories_saved += 1\n        except (ValueError, OSError):\n            logger.debug(\"PersistentMemoryHook: failed to auto-save %s\", name)"
+            }
+          },
+          {
+            "id": "sdk-capture",
+            "type": "backend",
+            "label": "SDKCaptureHook",
+            "pos": [
+              560,
+              230
+            ],
+            "summary": "Records tool usage for RunResult.",
+            "detail": {
+              "kind": "code",
+              "title": "SDKCaptureHook",
+              "symbol": "SDKCaptureHook",
+              "language": "python",
+              "sources": [
+                {
+                  "path": "hook.py",
+                  "line": 58,
+                  "endLine": 73
+                }
+              ],
+              "code": "class SDKCaptureHook(AgentHook):\n    \"\"\"Records tool usage and messages for RunResult.\n\n    Used internally by ToolsClaw.run() to capture what happened during\n    the agent loop without exposing the full runner internals.\n    \"\"\"\n\n    def __init__(self) -> None:\n        self.tools_used: list[str] = []\n        self.messages: list[dict[str, Any]] = []\n\n    async def after_iteration(self, context: AgentHookContext) -> None:\n        for tc in context.tool_calls:\n            self.tools_used.append(tc.name)\n        self.messages = list(context.messages)"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "h1",
+            "from": "agent-hook",
+            "to": "ctx",
+            "label": "receives"
+          },
+          {
+            "id": "h2",
+            "from": "composite",
+            "to": "agent-hook",
+            "label": "extends",
+            "variant": "emphasis"
+          },
+          {
+            "id": "h3",
+            "from": "mem-compress",
+            "to": "agent-hook",
+            "label": "extends",
+            "variant": "dashed"
+          },
+          {
+            "id": "h4",
+            "from": "persistent-mem",
+            "to": "agent-hook",
+            "label": "extends",
+            "variant": "dashed"
+          },
+          {
+            "id": "h5",
+            "from": "sdk-capture",
+            "to": "agent-hook",
+            "label": "extends",
+            "variant": "dashed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "memory",
+      "type": "backend",
+      "label": "memory",
+      "pos": [
+        470,
+        720
+      ],
+      "sublabel": "compression",
+      "tag": "4 strategies",
+      "summary": "Token estimation and four message-history compression strategies.",
+      "detail": {
+        "kind": "diagram",
+        "title": "memory.py — compression",
+        "components": [
+          {
+            "id": "strategy",
+            "type": "cloud",
+            "label": "CompressionStrategy",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Enum of the four strategies.",
+            "detail": {
+              "kind": "code",
+              "title": "CompressionStrategy",
+              "symbol": "CompressionStrategy",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "TRUNCATE",
+                  "doc": "Drop whole older rounds."
+                },
+                {
+                  "name": "DROP_TOOL_RESULTS",
+                  "doc": "Truncate tool result text only."
+                },
+                {
+                  "name": "SUMMARIZE",
+                  "doc": "Replace older rounds with an LLM summary."
+                },
+                {
+                  "name": "HYBRID",
+                  "doc": "Summarize then trim to target ratio."
+                }
+              ],
+              "sources": [
+                {
+                  "path": "memory.py",
+                  "line": 17,
+                  "endLine": 30
+                }
+              ],
+              "code": "class CompressionStrategy(str, enum.Enum):\n    \"\"\"Available compression strategies.\"\"\"\n\n    TRUNCATE = \"truncate\"\n    \"\"\"Remove oldest rounds, keep a summary placeholder.\"\"\"\n\n    DROP_TOOL_RESULTS = \"drop\"\n    \"\"\"Truncate long tool result contents in-place.\"\"\"\n\n    SUMMARIZE = \"summarize\"\n    \"\"\"Use an LLM to summarize older rounds into a single message.\"\"\"\n\n    HYBRID = \"hybrid\"\n    \"\"\"Combination: drop tool details first, then truncate or summarize if needed.\"\"\""
+            }
+          },
+          {
+            "id": "compressor",
+            "type": "backend",
+            "label": "MemoryCompressor",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Public compression API and token accounting.",
+            "detail": {
+              "kind": "code",
+              "title": "MemoryCompressor",
+              "symbol": "MemoryCompressor",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "estimate_tokens",
+                  "signature": "def estimate_tokens(self, messages) -> int"
+                },
+                {
+                  "name": "should_compress",
+                  "signature": "def should_compress(self, messages, threshold_tokens) -> bool"
+                },
+                {
+                  "name": "compress",
+                  "signature": "async def compress(self, messages, strategy=HYBRID, target_ratio=0.5, min_rounds_to_keep=3, tool_result_max_chars=300)"
+                },
+                {
+                  "name": "_summarize_compress",
+                  "signature": "async def _summarize_compress(self, messages, target_ratio, min_rounds_to_keep)"
+                },
+                {
+                  "name": "_hybrid_compress",
+                  "signature": "async def _hybrid_compress(self, messages, target_ratio, min_rounds_to_keep, tool_result_max_chars)"
+                },
+                {
+                  "name": "_make_fallback_summary",
+                  "signature": "def _make_fallback_summary(self, ...)"
+                }
+              ],
+              "notes": [
+                "summarize_func is injected by the runner so the compressor never owns provider credentials."
+              ],
+              "sources": [
+                {
+                  "path": "memory.py",
+                  "line": 228,
+                  "endLine": 415
+                }
+              ],
+              "code": "class MemoryCompressor:\n    \"\"\"Core memory compressor for conversation history.\n\n    Provides multiple compression strategies and token estimation.\n\n    Args:\n        summarize_func: Optional async callable that takes a prompt string\n            and returns a summary string. Required for ``summarize`` and\n            ``hybrid`` strategies.\n    \"\"\"\n\n    def __init__(\n        self,\n        summarize_func: Callable[[str], Awaitable[str]] | None = None,\n    ) -> None:\n        self._summarize_func = summarize_func\n\n    # ------------------------------------------------------------------\n    # Public API\n    # ------------------------------------------------------------------\n\n    def estimate_tokens(self, messages: list[dict[str, Any]]) -> int:\n        \"\"\"Estimate the total token count of a message list.\"\"\"\n        return estimate_messages_tokens(messages)\n\n    def should_compress(\n        self,\n        messages: list[dict[str, Any]],\n        threshold_tokens: int,\n    ) -> bool:\n        \"\"\"Check if messages exceed the compression threshold.\"\"\"\n        return self.estimate_tokens(messages) > threshold_tokens\n\n    async def compress(\n        self,\n        messages: list[dict[str, Any]],\n        strategy: CompressionStrategy | str = CompressionStrategy.HYBRID,\n        target_ratio: float = 0.5,\n        min_rounds_to_keep: int = 3,\n        tool_result_max_chars: int = _DEFAULT_TOOL_RESULT_MAX_CHARS,\n    ) -> list[dict[str, Any]]:\n        \"\"\"Compress message history using the given strategy.\n\n        Args:\n            messages: The full message list (system + turns).\n            strategy: Compression strategy to use.\n            target_ratio: Target ratio of original size (0.0-1.0).\n            min_rounds_to_keep: Minimum number of conversation rounds to keep.\n            tool_result_max_chars: Max chars per tool result field.\n\n        Returns:\n            Compressed message list.\n        \"\"\"\n        if isinstance(strategy, str):\n            strategy = CompressionStrategy(strategy)\n\n        if strategy == CompressionStrategy.DROP_TOOL_RESULTS:\n            return _drop_tool_result_details(messages, tool_result_max_chars)\n\n        if strategy == CompressionStrategy.TRUNCATE:\n            return _truncate_rounds(messages, target_ratio, min_rounds_to_keep)\n\n        if strategy == CompressionStrategy.SUMMARIZE:\n            return await self._summarize_compress(\n                messages, target_ratio, min_rounds_to_keep,\n            )\n\n        if strategy == CompressionStrategy.HYBRID:\n            return await self._hybrid_compress(\n                messages, target_ratio, min_rounds_to_keep, tool_result_max_chars,\n            )\n\n        return messages\n\n    # ------------------------------------------------------------------\n    # Internal helpers\n    # ------------------------------------------------------------------\n\n    async def _summarize_compress(\n        self,\n        messages: list[dict[str, Any]],\n        target_ratio: float,\n        min_rounds_to_keep: int,\n    ) -> list[dict[str, Any]]:\n        \"\"\"Use LLM to summarize older rounds.\"\"\"\n        system_msgs = [m for m in messages if m.get(\"role\") == \"system\"]\n        non_system = [m for m in messages if m.get(\"role\") != \"system\"]\n\n        rounds = _group_into_rounds(non_system)\n        total_rounds = len(rounds)\n\n        if total_rounds <= min_rounds_to_keep:\n            return messages\n\n        keep = max(min_rounds_to_keep, int(total_rounds * target_ratio))\n        keep = min(keep, total_rounds)\n\n        to_summarize = rounds[:-keep]\n        kept = rounds[-keep:]\n\n        summary_text = self._make_fallback_summary(to_summarize)\n\n        # If we have a summarize function, use it\n        if self._summarize_func is not None:\n            try:\n                prompt = _build_summary_prompt(to_summarize)\n                summary_text = await self._summarize_func(prompt)\n            except Exception as exc:\n                logger.warning(\n                    \"MemoryCompressor: LLM summarization failed (%s), \"\n                    \"using fallback summary\",\n                    exc,\n                )\n\n        result = list(system_msgs)\n        result.append({\"role\": \"user\", \"content\": summary_text})\n        for group in kept:\n            result.extend(group)\n\n        logger.info(\n            \"MemoryCompressor: summarized %d rounds → 1 summary + %d rounds kept\",\n            len(to_summarize),\n            len(kept),\n        )\n\n        return result\n\n    async def _hybrid_compress(\n        self,\n        messages: list[dict[str, Any]],\n        target_ratio: float,\n        min_rounds_to_keep: int,\n        tool_result_max_chars: int,\n    ) -> list[dict[str, Any]]:\n        \"\"\"Hybrid: drop tool details first, then summarize if still over threshold.\"\"\"\n        result = _drop_tool_result_details(messages, tool_result_max_chars)\n\n        # If still over threshold, summarize older rounds\n        if self._summarize_func is not None:\n            rounds = _group_into_rounds(\n                [m for m in result if m.get(\"role\") != \"system\"]\n            )\n            if len(rounds) > min_rounds_to_keep * 2:\n                result = await self._summarize_compress(\n                    result, target_ratio, min_rounds_to_keep,\n                )\n        else:\n            # Fallback to truncation\n            result = _truncate_rounds(result, target_ratio, min_rounds_to_keep)\n\n        return result\n\n    @staticmethod\n    def _make_fallback_summary(\n        rounds: list[list[dict[str, Any]]],\n    ) -> str:\n        \"\"\"Generate a simple text summary without an LLM.\"\"\"\n        total_msgs = sum(len(g) for g in rounds)\n        tools_used: set[str] = set()\n        user_topics: list[str] = []\n\n        for group in rounds:\n            for msg in group:\n                if msg.get(\"role\") == \"user\":\n                    content = msg.get(\"content\", \"\")\n                    if isinstance(content, str) and content:\n                        user_topics.append(content[:120])\n                tcs = msg.get(\"tool_calls\")\n                if isinstance(tcs, list):\n                    for tc in tcs:\n                        fn = tc.get(\"function\", {})\n                        if fn.get(\"name\"):\n                            tools_used.add(fn[\"name\"])\n\n        parts = [\n            f\"[Previous conversation: {len(rounds)} round(s), \"\n            f\"{total_msgs} message(s).\",\n        ]\n        if user_topics:\n            topics = \"; \".join(\n                t.replace(\"\\n\", \" \").strip()\n                for t in user_topics[:5]\n            )\n            parts.append(f\"Topics: {topics}\")\n        if tools_used:\n            parts.append(f\"Tools used: {', '.join(sorted(tools_used))}\")\n        parts.append(\"]\")"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "m1",
+            "from": "compressor",
+            "to": "strategy",
+            "label": "selects"
+          }
+        ]
+      }
+    },
+    {
+      "id": "persistent-memory",
+      "type": "database",
+      "label": "persistent_memory",
+      "pos": [
+        700,
+        720
+      ],
+      "sublabel": "Memory + MemoryStore",
+      "tag": "markdown + YAML",
+      "summary": "File-backed memory: markdown with YAML frontmatter, indexed by MEMORY.md.",
+      "detail": {
+        "kind": "diagram",
+        "title": "persistent_memory.py — storage",
+        "components": [
+          {
+            "id": "memory-model",
+            "type": "database",
+            "label": "Memory",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "One memory entry with frontmatter serialization.",
+            "detail": {
+              "kind": "code",
+              "title": "Memory",
+              "symbol": "Memory",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "_name",
+                  "type": "str",
+                  "doc": "Kebab-case slug; validated on construction."
+                },
+                {
+                  "name": "_description",
+                  "type": "str",
+                  "doc": "One-line summary used for recall relevance."
+                },
+                {
+                  "name": "_type",
+                  "type": "str",
+                  "doc": "One of user | feedback | project | reference."
+                },
+                {
+                  "name": "_content",
+                  "type": "str",
+                  "doc": "The fact body."
+                },
+                {
+                  "name": "_links",
+                  "type": "list[str]",
+                  "doc": "[[name]] links extracted from content, merged with explicit links."
+                },
+                {
+                  "name": "_created_at / _updated_at",
+                  "type": "datetime",
+                  "doc": "UTC timestamps, auto-set when omitted."
+                }
+              ],
+              "methods": [
+                {
+                  "name": "to_frontmatter",
+                  "signature": "def to_frontmatter(self) -> str",
+                  "doc": "Renders the markdown file with YAML frontmatter."
+                },
+                {
+                  "name": "from_frontmatter",
+                  "signature": "@classmethod def from_frontmatter(cls, text: str, file_path: Path | None = None)",
+                  "doc": "Parses a memory file back into an object."
+                },
+                {
+                  "name": "to_index_line",
+                  "signature": "def to_index_line(self) -> str",
+                  "doc": "One MEMORY.md index row."
+                }
+              ],
+              "notes": [
+                "The name regex ^[a-z][a-z0-9-]*$ and the VALID_TYPES set are both enforced in __init__, so an invalid memory cannot be constructed."
+              ],
+              "sources": [
+                {
+                  "path": "persistent_memory.py",
+                  "line": 62,
+                  "endLine": 260
+                }
+              ],
+              "code": "class Memory:\n    \"\"\"A single persistent memory entry.\n\n    Args:\n        name: Short kebab-case slug (e.g. ``user-preference``).\n        description: One-line summary used for relevance during recall.\n        type: One of ``user``, ``feedback``, ``project``, ``reference``.\n        content: The actual memory content.\n        links: List of linked memory names (extracted from [[name]] in content).\n        created_at: Creation timestamp (auto-set if None).\n        updated_at: Last update timestamp (auto-set if None).\n    \"\"\"\n\n    __slots__ = (\n        \"_name\",\n        \"_description\",\n        \"_type\",\n        \"_content\",\n        \"_links\",\n        \"_created_at\",\n        \"_updated_at\",\n    )\n\n    def __init__(\n        self,\n        name: str,\n        description: str = \"\",\n        type: str = \"reference\",\n        content: str = \"\",\n        links: list[str] | None = None,\n        created_at: datetime | None = None,\n        updated_at: datetime | None = None,\n    ) -> None:\n        if not re.match(r\"^[a-z][a-z0-9-]*$\", name):\n            raise ValueError(\n                f\"Memory name must be a kebab-case slug, got {name!r}\"\n            )\n        if type not in VALID_TYPES:\n            raise ValueError(\n                f\"Invalid memory type {type!r}. Must be one of {sorted(VALID_TYPES)}\"\n            )\n\n        self._name = name\n        self._description = description\n        self._type = type\n        self._content = content\n        # Extract links from content, merging with any explicitly passed links\n        content_links = LINK_RE.findall(content)\n        self._links = sorted(set(list(links or []) + content_links))\n        now = datetime.now(timezone.utc)\n        self._created_at = created_at or now\n        self._updated_at = updated_at or now\n\n    # -- read-only properties ---------------------------------------------\n\n    @property\n    def name(self) -> str:\n        return self._name\n\n    @property\n    def description(self) -> str:\n        return self._description\n\n    @property\n    def type(self) -> str:\n        return self._type\n\n    @property\n    def content(self) -> str:\n        return self._content\n\n    @property\n    def links(self) -> list[str]:\n        return list(self._links)\n\n    @property\n    def created_at(self) -> datetime:\n        return self._created_at\n\n    @property\n    def updated_at(self) -> datetime:\n        return self._updated_at\n\n    # -- serialisation ----------------------------------------------------\n\n    def to_frontmatter(self) -> str:\n        \"\"\"Render this memory as a markdown file with YAML frontmatter.\"\"\"\n        lines = [_FM_DELIM]\n        lines.append(f\"name: {self._name}\")\n        if self._description:\n            lines.append(f\"description: {self._description}\")\n        lines.append(\"metadata:\")\n        lines.append(f\"  type: {self._type}\")\n        # Only include timestamps if they are meaningful\n        lines.append(f\"created_at: {self._created_at.isoformat()}\")\n        lines.append(f\"updated_at: {self._updated_at.isoformat()}\")\n        lines.append(_FM_DELIM)\n        lines.append(\"\")  # blank line after frontmatter\n        lines.append(self._content.strip())\n        lines.append(\"\")  # trailing newline\n        return \"\\n\".join(lines)\n\n    @classmethod\n    def from_frontmatter(cls, text: str, file_path: Path | None = None) -> Memory:\n        \"\"\"Parse a markdown file with YAML frontmatter into a Memory.\n\n        Args:\n            text: The raw file content.\n            file_path: Optional path for error messages.\n\n        Returns:\n            A new Memory instance.\n\n        Raises:\n            ValueError: If the frontmatter is malformed or required fields missing.\n        \"\"\"\n        tag = f\" ({file_path})\" if file_path else \"\"\n\n        # Split frontmatter from body\n        lines = text.split(\"\\n\")\n        if not lines or lines[0].strip() != _FM_DELIM:\n            raise ValueError(f\"Missing frontmatter delimiter{tag}\")\n\n        # Find closing delimiter\n        end_idx = None\n        for i in range(1, len(lines)):\n            if lines[i].strip() == _FM_DELIM:\n                end_idx = i\n                break\n\n        if end_idx is None:\n            raise ValueError(f\"Unclosed frontmatter{tag}\")\n\n        fm_lines = lines[1:end_idx]\n        body = \"\\n\".join(lines[end_idx + 1:]).strip()\n\n        # Parse YAML-like frontmatter (simple key-value, no nested YAML)\n        # We use a simple parser instead of pulling in pyyaml dependency\n        fm_data = _parse_simple_frontmatter(fm_lines, tag)\n\n        name = fm_data.get(\"name\")\n        if not name:\n            raise ValueError(f\"Missing 'name' in frontmatter{tag}\")\n\n        # Extract metadata.type\n        mem_type = \"reference\"\n        metadata = fm_data.get(\"metadata\", {})\n        if isinstance(metadata, dict):\n            mem_type = metadata.get(\"type\", \"reference\")\n        elif isinstance(metadata, str):\n            mem_type = metadata\n\n        description = fm_data.get(\"description\", \"\")\n\n        # Parse timestamps\n        created_at = None\n        updated_at = None\n        if \"created_at\" in fm_data:\n            try:\n                created_at = datetime.fromisoformat(fm_data[\"created_at\"])\n            except (ValueError, TypeError):\n                pass\n        if \"updated_at\" in fm_data:\n            try:\n                updated_at = datetime.fromisoformat(fm_data[\"updated_at\"])\n            except (ValueError, TypeError):\n                pass\n\n        # Extract links from body\n        links = LINK_RE.findall(body)\n\n        return cls(\n            name=name,\n            description=description,\n            type=mem_type,\n            content=body,\n            links=links,\n            created_at=created_at,\n            updated_at=updated_at,\n        )\n\n    # -- helpers ----------------------------------------------------------\n\n    def to_index_line(self) -> str:\n        \"\"\"Return a single line for MEMORY.md index.\"\"\"\n        type_tag = f\"[{self._type}]\"\n        # Keep description concise for index\n        desc = self._description or \"(no description)\"\n        return f\"- {type_tag} **{self._name}** — {desc}\"\n\n    def __repr__(self) -> str:\n        return (\n            f\"Memory(name={self._name!r}, type={self._type!r}, \"\n            f\"description={self._description!r})\"\n        )\n\n\n# ---------------------------------------------------------------------------\n# Store"
+            }
+          },
+          {
+            "id": "store",
+            "type": "database",
+            "label": "MemoryStore",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Persistence, search, link graph, dedupe, and consolidation.",
+            "detail": {
+              "kind": "code",
+              "title": "MemoryStore",
+              "symbol": "MemoryStore",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "save / load / delete / list_memories / exists",
+                  "doc": "Basic CRUD over the memory directory."
+                },
+                {
+                  "name": "search",
+                  "signature": "def search(self, query: str, *, max_results: int = 10) -> list[Memory]"
+                },
+                {
+                  "name": "find_by_type",
+                  "signature": "def find_by_type(self, type_: str, *, max_results: int = 20)"
+                },
+                {
+                  "name": "rebuild_index",
+                  "signature": "def rebuild_index(self) -> str",
+                  "doc": "Regenerates MEMORY.md from the files on disk."
+                },
+                {
+                  "name": "find_related",
+                  "signature": "def find_related(self, name: str) -> list[Memory]"
+                },
+                {
+                  "name": "get_link_graph",
+                  "signature": "def get_link_graph(self) -> dict[str, list[str]]"
+                },
+                {
+                  "name": "find_duplicates",
+                  "signature": "def find_duplicates(self) -> list[tuple[Memory, Memory]]"
+                },
+                {
+                  "name": "consolidate",
+                  "signature": "def consolidate(self, dry_run: bool = True) -> dict[str, Any]"
+                },
+                {
+                  "name": "stats",
+                  "signature": "def stats(self) -> dict[str, Any]"
+                },
+                {
+                  "name": "update_or_create",
+                  "signature": "def update_or_create(self, ...)"
+                },
+                {
+                  "name": "import_memories",
+                  "signature": "def import_memories(self, source_dir: str | Path) -> int"
+                }
+              ],
+              "sources": [
+                {
+                  "path": "persistent_memory.py",
+                  "line": 264,
+                  "endLine": 815
+                }
+              ],
+              "code": "class MemoryStore:\n    \"\"\"File-based persistent memory store.\n\n    Manages individual memory files inside a ``memory/`` directory and\n    maintains a ``MEMORY.md`` index file.\n\n    Args:\n        base_dir: The root directory where the ``memory/`` folder lives.\n    \"\"\"\n\n    def __init__(self, base_dir: str | Path) -> None:\n        self._base = Path(base_dir).expanduser().resolve()\n        self._memory_dir = self._base / MEMORY_DIR_NAME\n        self._index_path = self._base / INDEX_FILENAME\n\n    # -- properties -------------------------------------------------------\n\n    @property\n    def base_dir(self) -> Path:\n        return self._base\n\n    @property\n    def memory_dir(self) -> Path:\n        return self._memory_dir\n\n    @property\n    def index_path(self) -> Path:\n        return self._index_path\n\n    # -- CRUD -------------------------------------------------------------\n\n    def save(self, memory: Memory) -> Path:\n        \"\"\"Write a memory to disk. Creates the memory directory if needed.\n\n        Updates ``updated_at`` to now. Returns the file path written.\n        \"\"\"\n        memory._updated_at = datetime.now(timezone.utc)\n        self._memory_dir.mkdir(parents=True, exist_ok=True)\n        file_path = self._memory_dir / f\"{memory.name}.md\"\n        file_path.write_text(memory.to_frontmatter(), encoding=\"utf-8\")\n        logger.info(\"Memory saved: %s (%s)\", memory.name, file_path)\n        return file_path\n\n    def load(self, name: str) -> Memory | None:\n        \"\"\"Load a single memory by name. Returns None if not found.\"\"\"\n        file_path = self._memory_dir / f\"{name}.md\"\n        if not file_path.exists():\n            return None\n        try:\n            text = file_path.read_text(encoding=\"utf-8\")\n            return Memory.from_frontmatter(text, file_path=file_path)\n        except (ValueError, OSError) as exc:\n            logger.warning(\"Failed to load memory %s: %s\", name, exc)\n            return None\n\n    def delete(self, name: str) -> bool:\n        \"\"\"Delete a memory file by name. Returns True if deleted.\"\"\"\n        file_path = self._memory_dir / f\"{name}.md\"\n        if not file_path.exists():\n            return False\n        file_path.unlink()\n        logger.info(\"Memory deleted: %s\", name)\n        return True\n\n    def list_memories(self) -> list[Memory]:\n        \"\"\"List all memories in the store, sorted by name.\"\"\"\n        if not self._memory_dir.exists():\n            return []\n        memories: list[Memory] = []\n        for f in sorted(self._memory_dir.iterdir()):\n            if f.suffix == \".md\" and f.is_file():\n                try:\n                    mem = Memory.from_frontmatter(\n                        f.read_text(encoding=\"utf-8\"), file_path=f\n                    )\n                    memories.append(mem)\n                except (ValueError, OSError) as exc:\n                    logger.warning(\"Skipping invalid memory file %s: %s\", f.name, exc)\n        return memories\n\n    def exists(self, name: str) -> bool:\n        \"\"\"Check if a memory with the given name exists.\"\"\"\n        return (self._memory_dir / f\"{name}.md\").exists()\n\n    # -- search -----------------------------------------------------------\n\n    def search(self, query: str, *, max_results: int = 10) -> list[Memory]:\n        \"\"\"Full-text search across memory content and metadata.\n\n        Matches against name, description, and content. Supports multi-word\n        queries by splitting into individual tokens. Case-insensitive.\n        \"\"\"\n        query = query.lower().strip()\n        if not query:\n            return []\n\n        # Tokenise: split into individual words for multi-word matching\n        tokens = [t for t in query.split() if len(t) > 1]\n        if not tokens:\n            tokens = [query]\n\n        results: list[tuple[Memory, int]] = []\n\n        for mem in self.list_memories():\n            score = 0\n\n            # Exact phrase match (highest priority)\n            if query in mem.name.lower():\n                score += 10\n            if query in mem.description.lower():\n                score += 5\n            if query in mem.content.lower():\n                score += 3\n\n            # Individual token matches (partial)\n            for token in tokens:\n                if token in mem.name.lower():\n                    score += 3\n                if token in mem.description.lower():\n                    score += 2\n                if token in mem.content.lower():\n                    score += 1\n                if token == mem.type.lower():\n                    score += 2\n\n            if score > 0:\n                results.append((mem, score))\n\n        results.sort(key=lambda x: x[1], reverse=True)\n        return [m for m, _ in results[:max_results]]\n\n    def find_by_type(self, type_: str, *, max_results: int = 20) -> list[Memory]:\n        \"\"\"Find all memories of a given type.\"\"\"\n        all_mems = self.list_memories()\n        filtered = [m for m in all_mems if m.type == type_]\n        return filtered[:max_results]\n\n    # -- index management -------------------------------------------------\n\n    def rebuild_index(self) -> str:\n        \"\"\"Rebuild the MEMORY.md index file from all stored memories.\n\n        Returns the index content as a string.\n        \"\"\"\n        memories = self.list_memories()\n        lines: list[str] = [\n            \"# Memory Index\",\n            \"\",\n            f\"Auto-generated index. {len(memories)} memory file(s) total.\",\n            \"\",\n        ]\n\n        # Group by type\n        by_type: dict[str, list[Memory]] = {}\n        for mem in memories:\n            by_type.setdefault(mem.type, []).append(mem)\n\n        for type_ in sorted(by_type.keys()):\n            lines.append(f\"## {type_.capitalize()}\")\n            lines.append(\"\")\n            for mem in by_type[type_]:\n                lines.append(mem.to_index_line())\n            lines.append(\"\")\n\n        if not memories:\n            lines.append(\"_(no memories yet)_\")\n            lines.append(\"\")\n\n        content = \"\\n\".join(lines)\n        self._index_path.write_text(content, encoding=\"utf-8\")\n        logger.info(\"Memory index rebuilt: %d entries\", len(memories))\n        return content\n\n    def get_index_preview(self, max_lines: int = 20) -> str:\n        \"\"\"Read the first N lines of the index for context injection.\"\"\"\n        if not self._index_path.exists():\n            return self.rebuild_index()\n        lines = self._index_path.read_text(encoding=\"utf-8\").split(\"\\n\")\n        return \"\\n\".join(lines[:max_lines])\n\n    # -- link graph -------------------------------------------------------\n\n    def find_related(self, name: str) -> list[Memory]:\n        \"\"\"Find memories related to the given memory via ``[[name]]`` links.\n\n        Returns both:\n        - Memories that *this* memory links to (outgoing links).\n        - Memories that link *to* this memory (incoming links).\n\n        Deduplicated and sorted by name.\n        \"\"\"\n        target = self.load(name)\n        if target is None:\n            return []\n\n        # Outgoing: load each [[link]] from the target's content\n        seen: set[str] = set()\n        related: list[Memory] = []\n\n        for link_name in target.links:\n            if link_name in seen:\n                continue\n            seen.add(link_name)\n            linked = self.load(link_name)\n            if linked is not None:\n                related.append(linked)\n\n        # Incoming: scan all memories for [[name]] references\n        for mem in self.list_memories():\n            if mem.name == name or mem.name in seen:\n                continue\n            if name in mem.links:\n                seen.add(mem.name)\n                related.append(mem)\n\n        related.sort(key=lambda m: m.name)\n        return related\n\n    def get_link_graph(self) -> dict[str, list[str]]:\n        \"\"\"Build the full link graph as an adjacency dict.\n\n        Returns a ``{memory_name: [linked_names]}`` dict. Only includes\n        links where the target memory actually exists.\n        \"\"\"\n        all_mems = self.list_memories()\n        name_set = {m.name for m in all_mems}\n\n        graph: dict[str, list[str]] = {}\n        for mem in all_mems:\n            resolved = [ln for ln in mem.links if ln in name_set]\n            if resolved:\n                graph[mem.name] = resolved\n        return graph\n\n    # -- consolidation ----------------------------------------------------\n\n    def find_duplicates(self) -> list[tuple[Memory, Memory]]:\n        \"\"\"Find memory pairs that have highly similar names or content.\n\n        Returns a list of ``(kept, duplicate)`` tuples where the duplicate\n        is suggested for merging into the kept memory. Uses simple heuristics:\n        exact name match after normalisation, or near-identical content.\n        \"\"\"\n        all_mems = self.list_memories()\n        pairs: list[tuple[Memory, Memory]] = []\n        seen: set[str] = set()\n\n        for i, a in enumerate(all_mems):\n            if a.name in seen:\n                continue\n            for b in all_mems[i + 1:]:\n                if b.name in seen:\n                    continue\n\n                # Same name after normalisation (e.g. tool-used-read-file vs tool-used-readfile)\n                norm_a = a.name.replace(\"-\", \"\").replace(\"_\", \"\")\n                norm_b = b.name.replace(\"-\", \"\").replace(\"_\", \"\")\n                if norm_a == norm_b:\n                    pairs.append((a, b))\n                    seen.add(b.name)\n                    continue\n\n                # Near-identical content (one is substring of another)\n                if len(a.content) > 20 and len(b.content) > 20:\n                    if a.content in b.content or b.content in a.content:\n                        pairs.append((a, b))\n                        seen.add(b.name)\n                        continue\n\n        return pairs\n\n    def consolidate(self, dry_run: bool = True) -> dict[str, Any]:\n        \"\"\"Merge duplicate or highly similar memories.\n\n        Args:\n            dry_run: If True, only report what would be merged without\n                actually modifying anything.\n\n        Returns:\n            A dict with keys ``merged`` (count), ``kept`` (count),\n            ``details`` (list of merge descriptions).\n        \"\"\"\n        pairs = self.find_duplicates()\n        details: list[dict[str, Any]] = []\n        merged_count = 0\n        kept_count = 0\n\n        for kept, duplicate in pairs:\n            # Merge: keep the longer description, combine content\n            merged_desc = (\n                kept.description\n                if len(kept.description) >= len(duplicate.description)\n                else duplicate.description\n            )\n            merged_content = kept.content\n            if duplicate.content not in merged_content:\n                merged_content = merged_content + \"\\n\\n\" + duplicate.content\n\n            details.append({\n                \"kept\": kept.name,\n                \"removed\": duplicate.name,\n                \"description\": merged_desc,\n                \"content_length\": len(merged_content),\n            })\n\n            if not dry_run:\n                updated = Memory(\n                    name=kept.name,\n                    description=merged_desc,\n                    type=kept.type,\n                    content=merged_content,\n                    links=list(set(kept.links + duplicate.links)),\n                    created_at=kept.created_at,\n                )\n                self.save(updated)\n                self.delete(duplicate.name)\n                merged_count += 1\n                kept_count += 1\n\n        if not dry_run:\n            self.rebuild_index()\n            logger.info(\n                \"Consolidation: merged %d duplicate(s), kept %d\",\n                merged_count,\n                kept_count,\n            )\n\n        return {\n            \"merged\": len(pairs) if dry_run else merged_count,\n            \"kept\": len(pairs) if dry_run else kept_count,\n            \"dry_run\": dry_run,\n            \"details\": details,\n        }\n\n    # -- stats ------------------------------------------------------------\n\n    def stats(self) -> dict[str, Any]:\n        \"\"\"Return memory store statistics.\n\n        Returns a dict with:\n        - ``total``: total memory count.\n        - ``by_type``: dict of ``{type: count}``.\n        - ``total_links``: total number of ``[[links]]`` across all memories.\n        - ``orphan_links``: links that point to non-existent memories.\n        - ``oldest``: ISO timestamp of the oldest memory.\n        - ``newest``: ISO timestamp of the newest memory.\n        - ``total_size_bytes``: total disk size of all memory files.\n        \"\"\"\n        all_mems = self.list_memories()\n        name_set = {m.name for m in all_mems}\n\n        by_type: dict[str, int] = {}\n        total_links = 0\n        orphan_links = 0\n        total_size = 0\n        oldest: datetime | None = None\n        newest: datetime | None = None\n\n        for mem in all_mems:\n            by_type[mem.type] = by_type.get(mem.type, 0) + 1\n            total_links += len(mem.links)\n            for ln in mem.links:\n                if ln not in name_set:\n                    orphan_links += 1\n            if oldest is None or mem.created_at < oldest:\n                oldest = mem.created_at\n            if newest is None or mem.created_at > newest:\n                newest = mem.created_at\n\n            fpath = self._memory_dir / f\"{mem.name}.md\"\n            if fpath.exists():\n                total_size += fpath.stat().st_size\n\n        return {\n            \"total\": len(all_mems),\n            \"by_type\": dict(sorted(by_type.items())),\n            \"total_links\": total_links,\n            \"orphan_links\": orphan_links,\n            \"oldest\": oldest.isoformat() if oldest else None,\n            \"newest\": newest.isoformat() if newest else None,\n            \"total_size_bytes\": total_size,\n        }\n\n    # -- upsert -----------------------------------------------------------\n\n    def update_or_create(\n        self,\n        name: str,\n        *,\n        description: str | None = None,\n        type: str | None = None,\n        content: str | None = None,\n        merge_content: bool = False,\n    ) -> Memory:\n        \"\"\"Update an existing memory or create a new one.\n\n        Args:\n            name: Memory name (kebab-case slug).\n            description: If provided, replaces the existing description.\n            type: If provided, replaces the existing type.\n            content: If provided, replaces (or merges with) existing content.\n            merge_content: If True and the memory exists, append new content\n                to existing content instead of replacing it.\n\n        Returns:\n            The saved Memory instance.\n        \"\"\"\n        existing = self.load(name)\n\n        if existing is None:\n            # Create new\n            mem = Memory(\n                name=name,\n                description=description or \"\",\n                type=type or \"reference\",\n                content=content or \"\",\n            )\n            self.save(mem)\n            return mem\n\n        # Update existing\n        new_desc = description if description is not None else existing.description\n        new_type = type if type is not None else existing.type\n\n        if content is not None:\n            if merge_content and content not in existing.content:\n                new_content = existing.content + \"\\n\\n\" + content\n            else:\n                new_content = content\n        else:\n            new_content = existing.content\n\n        # Extract links from new content if provided\n        new_links = list(existing.links)\n        if content:\n            new_links = list(set(new_links + LINK_RE.findall(content)))\n\n        mem = Memory(\n            name=existing.name,\n            description=new_desc,\n            type=new_type,\n            content=new_content,\n            links=new_links,\n            created_at=existing.created_at,\n        )\n        self.save(mem)\n        return mem\n\n    # -- batch operations -------------------------------------------------\n\n    def import_memories(self, source_dir: str | Path) -> int:\n        \"\"\"Import memory files from an external directory.\n\n        Only imports files matching the frontmatter format.\n        Returns the number of successfully imported memories.\n        \"\"\"\n        source = Path(source_dir)\n        if not source.is_dir():\n            logger.warning(\"Import source not found: %s\", source)\n            return 0\n\n        count = 0\n        for f in sorted(source.iterdir()):\n            if f.suffix == \".md\" and f.is_file():\n                try:\n                    text = f.read_text(encoding=\"utf-8\")\n                    mem = Memory.from_frontmatter(text, file_path=f)\n                    # Avoid overwrite if name already exists\n                    if not self.exists(mem.name):\n                        self.save(mem)\n                        count += 1\n                    else:\n                        logger.debug(\"Skipping duplicate memory: %s\", mem.name)\n                except (ValueError, OSError) as exc:\n                    logger.debug(\"Skipping %s: %s\", f.name, exc)\n        logger.info(\"Imported %d memories from %s\", count, source)\n        return count\n\n\n# ---------------------------------------------------------------------------\n# Frontmatter parser\n# ---------------------------------------------------------------------------\n\n\ndef _parse_simple_frontmatter(\n    lines: list[str], tag: str = \"\"\n) -> dict[str, Any]:\n    \"\"\"Parse simple YAML-like frontmatter lines into a dict.\n\n    Handles:\n    - ``key: value`` scalars\n    - ``metadata:`` with nested ``  key: value``\n    - Quoted values (single and double)\n\n    Does NOT handle lists, booleans, or multi-line strings.\n    \"\"\"\n    result: dict[str, Any] = {}\n    current_key: str | None = None\n    current_nested: dict[str, Any] | None = None\n\n    for line in lines:\n        stripped = line.strip()\n        if not stripped:\n            continue\n\n        # Check for nested lines (indented under metadata:)\n        if line.startswith(\"  \") or line.startswith(\"    \"):\n            if current_key is not None:\n                nested_match = re.match(r\"  +(\\w+):\\s*(.*)\", line)\n                if nested_match:\n                    k, v = nested_match.group(1), nested_match.group(2).strip()\n                    v = _strip_quotes(v)\n                    if current_nested is not None:\n                        current_nested[k] = v\n                    else:\n                        result[k] = v\n            continue\n\n        # Top-level key: value\n        match = re.match(r\"(\\w+):\\s*(.*)\", stripped)\n        if not match:\n            continue\n\n        key, value = match.group(1), match.group(2).strip()\n        value = _strip_quotes(value)\n\n        if key == \"metadata\":\n            # Start of metadata block\n            current_key = key\n            current_nested = {}\n            if value:  # inline metadata: type: user\n                # Parse inline metadata: key: value\n                inline_match = re.match(r\"(\\w+):\\s*(.*)\", value)\n                if inline_match:\n                    current_nested[inline_match.group(1)] = _strip_quotes(\n                        inline_match.group(2).strip()\n                    )\n            result[key] = current_nested\n        else:\n            current_key = key\n            result[key] = value\n\n    return result\n\n\ndef _strip_quotes(value: str) -> str:\n    \"\"\"Remove surrounding single or double quotes from a value.\"\"\"\n    if len(value) >= 2:\n        if (value.startswith('\"') and value.endswith('\"')) or (\n            value.startswith(\"'\") and value.endswith(\"'\")\n        ):\n            return value[1:-1]"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "pm1",
+            "from": "store",
+            "to": "memory-model",
+            "label": "serializes",
+            "variant": "emphasis"
+          }
+        ]
+      }
+    },
+    {
+      "id": "provider",
+      "type": "cloud",
+      "label": "provider",
+      "pos": [
+        700,
+        240
+      ],
+      "sublabel": "OpenAI API",
+      "tag": "stream + tools",
+      "summary": "Chat client, response dataclasses, and conversation history with compression.",
+      "detail": {
+        "kind": "diagram",
+        "title": "provider.py — LLM access",
+        "components": [
+          {
+            "id": "llm-provider",
+            "type": "cloud",
+            "label": "LLMProvider",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "AsyncOpenAI wrapper with tool calling.",
+            "detail": {
+              "kind": "code",
+              "title": "LLMProvider",
+              "symbol": "LLMProvider",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "chat",
+                  "signature": "async def chat(self, messages, tools=None) -> LLMResponse"
+                },
+                {
+                  "name": "stream_chat",
+                  "signature": "async def stream_chat(self, messages, tools=None)"
+                }
+              ],
+              "notes": [
+                "api_key falls back to the literal \"none\" so a local OpenAI-compatible server works without credentials."
+              ],
+              "sources": [
+                {
+                  "path": "provider.py",
+                  "line": 46,
+                  "endLine": 183
+                }
+              ],
+              "code": "class LLMProvider:\n    \"\"\"OpenAI-compatible LLM provider with tool calling support.\"\"\"\n\n    def __init__(self, config: Config) -> None:\n        pcfg = config.get_provider_config()\n        self._model = config.model\n        self._client = AsyncOpenAI(\n            api_key=pcfg.api_key or \"none\",\n            base_url=pcfg.api_base or None,\n        )\n\n    async def chat(\n        self,\n        messages: list[dict[str, Any]],\n        tools: list[dict[str, Any]] | None = None,\n    ) -> LLMResponse:\n        \"\"\"Send a chat completion request and parse the response.\"\"\"\n        kwargs: dict[str, Any] = {\n            \"model\": self._model,\n            \"messages\": messages,\n        }\n        if tools:\n            kwargs[\"tools\"] = tools\n            kwargs[\"tool_choice\"] = \"auto\"\n\n        resp = await self._client.chat.completions.create(**kwargs)\n        choice = resp.choices[0]\n        msg = choice.message\n\n        content = msg.content or \"\"\n        tool_calls: list[ToolCallRequest] = []\n\n        if msg.tool_calls:\n            for tc in msg.tool_calls:\n                try:\n                    args = json.loads(tc.function.arguments)\n                except (json.JSONDecodeError, TypeError):\n                    args = {}\n                tool_calls.append(\n                    ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args)\n                )\n\n        usage = TokenUsage()\n        if resp.usage:\n            usage = TokenUsage(\n                prompt_tokens=resp.usage.prompt_tokens or 0,\n                completion_tokens=resp.usage.completion_tokens or 0,\n                total_tokens=resp.usage.total_tokens or 0,\n            )\n\n        return LLMResponse(\n            content=content,\n            tool_calls=tool_calls,\n            finish_reason=choice.finish_reason or \"\",\n            usage=usage,\n        )\n\n    async def stream_chat(\n        self,\n        messages: list[dict[str, Any]],\n        tools: list[dict[str, Any]] | None = None,\n    ) -> AsyncIterator[LLMResponse]:\n        \"\"\"Stream a chat completion, yielding partial responses.\n\n        Yields LLMResponse objects with incremental content.\n        The final yield will have finish_reason set and usage populated.\n\n        Usage::\n\n            async for chunk in provider.stream_chat(messages, tools):\n                if chunk.content:\n                    print(chunk.content, end=\"\", flush=True)\n                if chunk.finish_reason:\n                    print(f\"\\\\n[Finished: {chunk.finish_reason}]\")\n        \"\"\"\n        kwargs: dict[str, Any] = {\n            \"model\": self._model,\n            \"messages\": messages,\n            \"stream\": True,\n        }\n        if tools:\n            kwargs[\"tools\"] = tools\n            kwargs[\"tool_choice\"] = \"auto\"\n\n        content_parts: list[str] = []\n        tool_calls_buf: dict[int, dict[str, Any]] = {}  # index -> partial tc data\n        finish_reason = \"\"\n        usage = TokenUsage()\n\n        async for chunk in await self._client.chat.completions.create(**kwargs):\n            choice = chunk.choices[0]\n            delta = choice.delta\n\n            # accumulate content\n            if delta.content:\n                content_parts.append(delta.content)\n                yield LLMResponse(content=\"\".join(content_parts))\n\n            # accumulate tool calls (streamed as they appear)\n            if delta.tool_calls:\n                for tc_delta in delta.tool_calls:\n                    idx = tc_delta.index\n                    if idx not in tool_calls_buf:\n                        tool_calls_buf[idx] = {\"id\": \"\", \"name\": \"\", \"arguments\": \"\"}\n                    if tc_delta.id:\n                        tool_calls_buf[idx][\"id\"] = tc_delta.id\n                    if tc_delta.function:\n                        if tc_delta.function.name:\n                            tool_calls_buf[idx][\"name\"] = tc_delta.function.name\n                        if tc_delta.function.arguments:\n                            tool_calls_buf[idx][\"arguments\"] += tc_delta.function.arguments\n\n            # capture finish reason from last chunk\n            if choice.finish_reason:\n                finish_reason = choice.finish_reason\n\n        # final: yield complete response with parsed tool calls\n        full_content = \"\".join(content_parts)\n        parsed_tool_calls: list[ToolCallRequest] = []\n        for idx in sorted(tool_calls_buf.keys()):\n            tc_data = tool_calls_buf[idx]\n            try:\n                args = json.loads(tc_data[\"arguments\"])\n            except (json.JSONDecodeError, TypeError):\n                args = {}\n            parsed_tool_calls.append(\n                ToolCallRequest(id=tc_data[\"id\"], name=tc_data[\"name\"], arguments=args)\n            )\n\n        # consume usage from a non-streamed summary call if available\n        # (most providers don't stream usage; fetch it separately if needed)\n        yield LLMResponse(\n            content=full_content,\n            tool_calls=parsed_tool_calls,\n            finish_reason=finish_reason,\n            usage=usage,\n        )"
+            }
+          },
+          {
+            "id": "llm-response",
+            "type": "backend",
+            "label": "LLMResponse",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Unified response with content, tool calls, finish reason, usage.",
+            "detail": {
+              "kind": "code",
+              "title": "LLMResponse",
+              "symbol": "LLMResponse",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "content",
+                  "type": "str"
+                },
+                {
+                  "name": "tool_calls",
+                  "type": "list[ToolCallRequest]"
+                },
+                {
+                  "name": "finish_reason",
+                  "type": "str"
+                },
+                {
+                  "name": "usage",
+                  "type": "TokenUsage"
+                }
+              ],
+              "methods": [
+                {
+                  "name": "has_tool_calls",
+                  "signature": "@property def has_tool_calls(self) -> bool"
+                }
+              ],
+              "sources": [
+                {
+                  "path": "provider.py",
+                  "line": 33,
+                  "endLine": 43
+                }
+              ],
+              "code": "class LLMResponse:\n    \"\"\"Unified LLM response.\"\"\"\n\n    content: str = \"\"\n    tool_calls: list[ToolCallRequest] = field(default_factory=list)\n    finish_reason: str = \"\"\n    usage: TokenUsage = field(default_factory=TokenUsage)\n\n    @property\n    def has_tool_calls(self) -> bool:\n        return len(self.tool_calls) > 0"
+            }
+          },
+          {
+            "id": "conversation",
+            "type": "database",
+            "label": "Conversation",
+            "pos": [
+              560,
+              40
+            ],
+            "summary": "Message history with optional compression on send.",
+            "detail": {
+              "kind": "code",
+              "title": "Conversation",
+              "symbol": "Conversation",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "messages",
+                  "signature": "@property def messages(self) -> list[dict[str, Any]]"
+                },
+                {
+                  "name": "reset",
+                  "signature": "def reset(self) -> None"
+                },
+                {
+                  "name": "set_system_prompt",
+                  "signature": "def set_system_prompt(self, content: str) -> None"
+                },
+                {
+                  "name": "compress",
+                  "signature": "async def compress(self, ...)"
+                },
+                {
+                  "name": "send",
+                  "signature": "async def send(self, ...)"
+                },
+                {
+                  "name": "stream_send",
+                  "signature": "async def stream_send(self, ...)"
+                }
+              ],
+              "sources": [
+                {
+                  "path": "provider.py",
+                  "line": 185,
+                  "endLine": 355
+                }
+              ],
+              "code": "class Conversation:\n    \"\"\"Maintains LLM conversation history for multi-turn dialogues.\n\n    Usage::\n\n        conv = Conversation(provider, system_prompt=\"You are helpful.\")\n        response = await conv.send(\"Hello\")\n        print(response.content)\n\n        # with tools\n        response = await conv.send(\"Use the calculator\", tools=tool_defs)\n\n        # streaming\n        async for chunk in conv.stream_send(\"Tell me a story\"):\n            print(chunk.content, end=\"\", flush=True)\n    \"\"\"\n\n    def __init__(\n        self,\n        provider: LLMProvider,\n        system_prompt: str = \"\",\n    ) -> None:\n        \"\"\"Initialize a conversation.\n\n        Args:\n            provider: The LLMProvider instance to use.\n            system_prompt: Optional system prompt to prepend.\n        \"\"\"\n        self._provider = provider\n        self._messages: list[dict[str, Any]] = []\n        if system_prompt:\n            self._messages.append({\"role\": \"system\", \"content\": system_prompt})\n\n    @property\n    def messages(self) -> list[dict[str, Any]]:\n        \"\"\"Return a copy of the current message history.\"\"\"\n        return list(self._messages)\n\n    def reset(self) -> None:\n        \"\"\"Clear all messages except system prompt.\"\"\"\n        system = [m for m in self._messages if m[\"role\"] == \"system\"]\n        self._messages = system\n\n    def set_system_prompt(self, content: str) -> None:\n        \"\"\"Set or update the system prompt.\"\"\"\n        for m in self._messages:\n            if m[\"role\"] == \"system\":\n                m[\"content\"] = content\n                return\n        self._messages.insert(0, {\"role\": \"system\", \"content\": content})\n\n    async def compress(\n        self,\n        strategy: str = \"hybrid\",\n        threshold_tokens: int = 80_000,\n        target_ratio: float = 0.5,\n        min_rounds_to_keep: int = 3,\n    ) -> bool:\n        \"\"\"Compress the conversation history if it exceeds the threshold.\n\n        Uses the internal LLM provider for summarization when needed.\n\n        Args:\n            strategy: Compression strategy (\"truncate\", \"drop\", \"summarize\", \"hybrid\").\n            threshold_tokens: Trigger compression above this many tokens.\n            target_ratio: Target ratio of original size after compression.\n            min_rounds_to_keep: Minimum number of recent rounds to keep.\n\n        Returns:\n            True if compression was performed, False otherwise.\n        \"\"\"\n        # Late import to avoid circular dependency\n        from toolsclaw.memory import MemoryCompressor, estimate_messages_tokens\n\n        est = estimate_messages_tokens(self._messages)\n        if est <= threshold_tokens:\n            return False\n\n        compressor = MemoryCompressor(\n            summarize_func=self._make_summarizer(),\n        )\n        self._messages = await compressor.compress(\n            self._messages,\n            strategy=strategy,\n            target_ratio=target_ratio,\n            min_rounds_to_keep=min_rounds_to_keep,\n        )\n        return True\n\n    def _make_summarizer(self):\n        \"\"\"Return an async callable wrapping the LLM provider.\"\"\"\n\n        async def _summarize(prompt: str) -> str:\n            msgs = [\n                {\"role\": \"system\", \"content\": \"You are a concise summarizer. \"\n                 \"Summarize the conversation preserving key facts, decisions, \"\n                 \"file paths, and the original language. Keep it brief.\"},\n                {\"role\": \"user\", \"content\": prompt},\n            ]\n            resp = await self._provider.chat(msgs, tools=None)\n            return resp.content or \"(summary unavailable)\"\n\n        return _summarize\n\n    async def send(\n        self,\n        message: str,\n        tools: list[dict[str, Any]] | None = None,\n    ) -> LLMResponse:\n        \"\"\"Send a user message and return the assistant response.\n\n        The user message and assistant response are automatically appended\n        to the conversation history.\n        \"\"\"\n        self._messages.append({\"role\": \"user\", \"content\": message})\n        response = await self._provider.chat(self._messages, tools)\n\n        if response.content:\n            self._messages.append({\"role\": \"assistant\", \"content\": response.content})\n        elif response.tool_calls:\n            # tool calls without content — still record the assistant turn\n            assistant_msg: dict[str, Any] = {\"role\": \"assistant\", \"content\": None}\n            assistant_msg[\"tool_calls\"] = [\n                {\n                    \"id\": tc.id,\n                    \"type\": \"function\",\n                    \"function\": {\n                        \"name\": tc.name,\n                        \"arguments\": json.dumps(tc.arguments, ensure_ascii=False),\n                    },\n                }\n                for tc in response.tool_calls\n            ]\n            self._messages.append(assistant_msg)\n\n        return response\n\n    async def stream_send(\n        self,\n        message: str,\n        tools: list[dict[str, Any]] | None = None,\n    ) -> AsyncIterator[LLMResponse]:\n        \"\"\"Stream a user message and yield incremental assistant responses.\n\n        On completion, appends both user and assistant messages to history.\n        \"\"\"\n        self._messages.append({\"role\": \"user\", \"content\": message})\n        response: LLMResponse | None = None\n\n        async for chunk in self._provider.stream_chat(self._messages, tools):\n            response = chunk\n            yield chunk\n\n        # append assistant message after stream completes\n        if response and (response.content or response.tool_calls):\n            if response.content:\n                self._messages.append({\"role\": \"assistant\", \"content\": response.content})\n            elif response.tool_calls:\n                assistant_msg: dict[str, Any] = {\"role\": \"assistant\", \"content\": None}\n                assistant_msg[\"tool_calls\"] = [\n                    {\n                        \"id\": tc.id,\n                        \"type\": \"function\",\n                        \"function\": {\n                            \"name\": tc.name,\n                            \"arguments\": json.dumps(tc.arguments, ensure_ascii=False),\n                        },\n                    }\n                    for tc in response.tool_calls\n                ]\n                self._messages.append(assistant_msg)"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "p1",
+            "from": "llm-provider",
+            "to": "llm-response",
+            "label": "returns",
+            "variant": "emphasis"
+          },
+          {
+            "id": "p2",
+            "from": "conversation",
+            "to": "llm-provider",
+            "label": "sends via",
+            "variant": "dashed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tool",
+      "type": "backend",
+      "label": "tool",
+      "pos": [
+        930,
+        240
+      ],
+      "sublabel": "ABC + registry",
+      "tag": "contract",
+      "summary": "The Tool abstract base class and the ToolRegistry container.",
+      "detail": {
+        "kind": "diagram",
+        "title": "tool.py — tool contract",
+        "components": [
+          {
+            "id": "tool-abc",
+            "type": "backend",
+            "label": "Tool (ABC)",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Abstract base every tool implements.",
+            "detail": {
+              "kind": "code",
+              "title": "Tool",
+              "symbol": "Tool",
+              "language": "python",
+              "methods": [
+                {
+                  "name": "name",
+                  "signature": "def name(self) -> str",
+                  "doc": "Required. Function-call name exposed to the LLM."
+                },
+                {
+                  "name": "description",
+                  "signature": "def description(self) -> str",
+                  "doc": "Required. Shown to the model for tool selection."
+                },
+                {
+                  "name": "parameters",
+                  "signature": "def parameters(self) -> dict[str, Any]",
+                  "doc": "Required. JSON Schema for the tool input."
+                },
+                {
+                  "name": "execute",
+                  "signature": "async def execute(self, **kwargs: Any) -> str",
+                  "doc": "Required. Runs the tool, returns a string result."
+                },
+                {
+                  "name": "to_schema",
+                  "signature": "def to_schema(self) -> dict[str, Any]",
+                  "doc": "Concrete. Emits the OpenAI function-calling schema."
+                }
+              ],
+              "notes": [
+                "Four of the five members are @abc.abstractmethod; only to_schema has a body."
+              ],
+              "sources": [
+                {
+                  "path": "tool.py",
+                  "line": 11,
+                  "endLine": 38
+                }
+              ],
+              "code": "\n    @property\n    @abc.abstractmethod\n    def name(self) -> str:\n        \"\"\"Function-call name exposed to the LLM.\"\"\"\n\n    @property\n    @abc.abstractmethod\n    def description(self) -> str:\n        \"\"\"Human-readable description shown to the LLM.\"\"\"\n\n    @property\n    @abc.abstractmethod\n    def parameters(self) -> dict[str, Any]:\n        \"\"\"JSON Schema for the tool's input parameters.\"\"\"\n\n    @abc.abstractmethod\n    async def execute(self, **kwargs: Any) -> str:\n        \"\"\"Run the tool and return a string result.\"\"\"\n\n    def to_schema(self) -> dict[str, Any]:\n        \"\"\"Produce an OpenAI function-calling schema.\"\"\"\n        return {\n            \"type\": \"function\",\n            \"function\": {\n                \"name\": self.name,\n                \"description\": self.description,\n                \"parameters\": self.parameters,"
+            }
+          },
+          {
+            "id": "registry",
+            "type": "backend",
+            "label": "ToolRegistry",
+            "pos": [
+              300,
+              40
+            ],
+            "summary": "Name → Tool map with a cached schema list.",
+            "detail": {
+              "kind": "code",
+              "title": "ToolRegistry",
+              "symbol": "ToolRegistry",
+              "language": "python",
+              "fields": [
+                {
+                  "name": "_tools",
+                  "type": "dict[str, Tool]",
+                  "doc": "Registered tools by name."
+                },
+                {
+                  "name": "_definitions",
+                  "type": "list[dict] | None",
+                  "doc": "Cached schema list; invalidated on register()."
+                }
+              ],
+              "methods": [
+                {
+                  "name": "register",
+                  "signature": "def register(self, tool: Tool) -> None",
+                  "doc": "Adds a tool and invalidates the schema cache."
+                },
+                {
+                  "name": "get",
+                  "signature": "def get(self, name: str) -> Tool | None",
+                  "doc": "Lookup by name."
+                },
+                {
+                  "name": "get_definitions",
+                  "signature": "def get_definitions(self) -> list[dict[str, Any]]",
+                  "doc": "Lazily builds and caches the OpenAI tool array."
+                },
+                {
+                  "name": "execute",
+                  "signature": "async def execute(self, name: str, arguments: dict[str, Any]) -> str",
+                  "doc": "Runs a tool by name, converting exceptions into error strings."
+                }
+              ],
+              "notes": [
+                "execute() never raises: unknown tools and tool exceptions both come back as \"Error: ...\" strings so one bad tool cannot abort the agent loop."
+              ],
+              "sources": [
+                {
+                  "path": "tool.py",
+                  "line": 41,
+                  "endLine": 70
+                }
+              ],
+              "code": "\n\nclass ToolRegistry:\n    \"\"\"Container for registered tools.\"\"\"\n\n    def __init__(self) -> None:\n        self._tools: dict[str, Tool] = {}\n        self._definitions: list[dict[str, Any]] | None = None\n\n    def register(self, tool: Tool) -> None:\n        self._tools[tool.name] = tool\n        self._definitions = None  # invalidate cache\n\n    def get(self, name: str) -> Tool | None:\n        return self._tools.get(name)\n\n    def get_definitions(self) -> list[dict[str, Any]]:\n        if self._definitions is None:\n            self._definitions = [t.to_schema() for t in self._tools.values()]\n        return self._definitions\n\n    async def execute(self, name: str, arguments: dict[str, Any]) -> str:\n        \"\"\"Execute a tool by name. Returns result or error string.\"\"\"\n        tool = self._tools.get(name)\n        if tool is None:\n            return f\"Error: unknown tool '{name}'\"\n        try:\n            return await tool.execute(**arguments)\n        except Exception as e:\n            return f\"Error executing {name}: {e}\""
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "t1",
+            "from": "registry",
+            "to": "tool-abc",
+            "label": "holds instances of",
+            "variant": "emphasis"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tools-package",
+      "type": "backend",
+      "label": "tools/",
+      "pos": [
+        930,
+        480
+      ],
+      "sublabel": "6 built-in tools",
+      "tag": "sandboxed",
+      "summary": "The concrete tools registered by AgentRunner.",
+      "detail": {
+        "kind": "diagram",
+        "title": "tools/ — built-in tools",
+        "subtitle": "Every tool resolves its target against the workspace and refuses to escape it.",
+        "components": [
+          {
+            "id": "read-file-tool",
+            "type": "backend",
+            "label": "ReadFileTool",
+            "pos": [
+              40,
+              40
+            ],
+            "summary": "Read a file inside the workspace.",
+            "detail": {
+              "kind": "code",
+              "title": "ReadFileTool",
+              "symbol": "ReadFileTool",
+              "language": "python",
+              "doc": "Read a file inside the workspace.",
+              "sources": [
+                {
+                  "path": "tools/read_file.py",
+                  "line": 11,
+                  "endLine": 89,
+                  "label": "ReadFileTool"
+                }
+              ],
+              "code": "class ReadFileTool(Tool):\n    \"\"\"Read a file's contents.\"\"\"\n\n    def __init__(self, workspace: Path) -> None:\n        self._workspace = workspace.resolve()\n\n    @property\n    def name(self) -> str:\n        return \"read_file\"\n\n    @property\n    def description(self) -> str:\n        return \"Read the contents of a file and return it as text.\"\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"path\": {\n                    \"type\": \"string\",\n                    \"description\": \"Path to the file (relative to workspace or absolute).\",\n                },\n                \"offset\": {\n                    \"type\": \"integer\",\n                    \"description\": \"Line number to start reading from (1-based).\",\n                    \"minimum\": 1,\n                },\n                \"limit\": {\n                    \"type\": \"integer\",\n                    \"description\": \"Maximum number of lines to read.\",\n                    \"minimum\": 1,\n                },\n            },\n            \"required\": [\"path\"],\n        }\n\n    def _resolve(self, path: str) -> Path:\n        p = Path(path).expanduser()\n        if not p.is_absolute():\n            p = (self._workspace / p).resolve()\n        else:\n            p = p.resolve()\n        if not self._is_under(p, self._workspace):\n            raise PermissionError(f\"Path escapes workspace: {path}\")\n        return p\n\n    @staticmethod\n    def _is_under(path: Path, parent: Path) -> bool:\n        try:\n            path.relative_to(parent)\n            return True\n        except ValueError:\n            return False\n\n    async def execute(self, **kwargs: Any) -> str:\n        path: str = kwargs.get(\"path\", \"\")\n        offset: int = kwargs.get(\"offset\", 1)\n        limit: int = kwargs.get(\"limit\", 2000)\n\n        try:\n            fp = self._resolve(path)\n        except PermissionError as e:\n            return str(e)\n\n        if not fp.exists():\n            return f\"Error: file not found: {path}\"\n        if not fp.is_file():\n            return f\"Error: not a file: {path}\"\n\n        try:\n            text = fp.read_text(encoding=\"utf-8\", errors=\"replace\")\n        except Exception as e:\n            return f\"Error reading file: {e}\"\n\n        lines = text.splitlines()\n        selected = lines[offset - 1 : offset - 1 + limit]\n        return \"\\n\".join(selected)"
+            }
+          },
+          {
+            "id": "write-file-tool",
+            "type": "cloud",
+            "label": "WriteFileTool",
+            "pos": [
+              276,
+              40
+            ],
+            "summary": "Write content to a file inside the workspace.",
+            "detail": {
+              "kind": "code",
+              "title": "WriteFileTool",
+              "symbol": "WriteFileTool",
+              "language": "python",
+              "doc": "Write content to a file inside the workspace.",
+              "sources": [
+                {
+                  "path": "tools/write_file.py",
+                  "line": 11,
+                  "endLine": 75,
+                  "label": "WriteFileTool"
+                }
+              ],
+              "code": "class WriteFileTool(Tool):\n    \"\"\"Write content to a file.\"\"\"\n\n    def __init__(self, workspace: Path) -> None:\n        self._workspace = workspace.resolve()\n\n    @property\n    def name(self) -> str:\n        return \"write_file\"\n\n    @property\n    def description(self) -> str:\n        return \"Write content to a file. Creates parent directories if needed.\"\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"path\": {\n                    \"type\": \"string\",\n                    \"description\": \"Path to the file (relative to workspace or absolute).\",\n                },\n                \"content\": {\n                    \"type\": \"string\",\n                    \"description\": \"The content to write.\",\n                },\n            },\n            \"required\": [\"path\", \"content\"],\n        }\n\n    def _resolve(self, path: str) -> Path:\n        p = Path(path).expanduser()\n        if not p.is_absolute():\n            p = (self._workspace / p).resolve()\n        else:\n            p = p.resolve()\n        if not self._is_under(p, self._workspace):\n            raise PermissionError(f\"Path escapes workspace: {path}\")\n        return p\n\n    @staticmethod\n    def _is_under(path: Path, parent: Path) -> bool:\n        try:\n            path.relative_to(parent)\n            return True\n        except ValueError:\n            return False\n\n    async def execute(self, **kwargs: Any) -> str:\n        path: str = kwargs.get(\"path\", \"\")\n        content: str = kwargs.get(\"content\", \"\")\n\n        try:\n            fp = self._resolve(path)\n        except PermissionError as e:\n            return str(e)\n\n        try:\n            fp.parent.mkdir(parents=True, exist_ok=True)\n            fp.write_text(content, encoding=\"utf-8\")\n            return f\"Wrote {len(content)} chars to {fp}\"\n        except Exception as e:\n            return f\"Error writing file: {e}\""
+            }
+          },
+          {
+            "id": "list-dir-tool",
+            "type": "backend",
+            "label": "ListDirTool",
+            "pos": [
+              512,
+              40
+            ],
+            "summary": "List a directory inside the workspace.",
+            "detail": {
+              "kind": "code",
+              "title": "ListDirTool",
+              "symbol": "ListDirTool",
+              "language": "python",
+              "doc": "List a directory inside the workspace.",
+              "sources": [
+                {
+                  "path": "tools/list_dir.py",
+                  "line": 11,
+                  "endLine": 80,
+                  "label": "ListDirTool"
+                }
+              ],
+              "code": "class ListDirTool(Tool):\n    \"\"\"List files and directories.\"\"\"\n\n    def __init__(self, workspace: Path) -> None:\n        self._workspace = workspace.resolve()\n\n    @property\n    def name(self) -> str:\n        return \"list_dir\"\n\n    @property\n    def description(self) -> str:\n        return \"List files and directories at a given path.\"\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"path\": {\n                    \"type\": \"string\",\n                    \"description\": \"Directory path (relative to workspace). Defaults to workspace root.\",\n                },\n            },\n        }\n\n    def _resolve(self, path: str | None) -> Path:\n        if path:\n            p = Path(path).expanduser()\n            if not p.is_absolute():\n                p = (self._workspace / p).resolve()\n            else:\n                p = p.resolve()\n        else:\n            p = self._workspace\n        if not self._is_under(p, self._workspace):\n            raise PermissionError(f\"Path escapes workspace: {path}\")\n        return p\n\n    @staticmethod\n    def _is_under(path: Path, parent: Path) -> bool:\n        try:\n            path.relative_to(parent)\n            return True\n        except ValueError:\n            return False\n\n    async def execute(self, **kwargs: Any) -> str:\n        path: str | None = kwargs.get(\"path\")\n\n        try:\n            dp = self._resolve(path)\n        except PermissionError as e:\n            return str(e)\n\n        if not dp.exists():\n            return f\"Error: path not found: {path or '.'}\"\n        if not dp.is_dir():\n            return f\"Error: not a directory: {path or '.'}\"\n\n        try:\n            entries = sorted(dp.iterdir())\n            lines: list[str] = []\n            for entry in entries:\n                prefix = \"[dir] \" if entry.is_dir() else \"[file]\"\n                lines.append(f\"{prefix} {entry.name}\")\n            return \"\\n\".join(lines) if lines else \"(empty directory)\"\n        except Exception as e:\n            return f\"Error listing directory: {e}\""
+            }
+          },
+          {
+            "id": "exec-tool",
+            "type": "cloud",
+            "label": "ExecTool",
+            "pos": [
+              40,
+              220
+            ],
+            "summary": "Run a shell command with deny-pattern and workspace containment.",
+            "detail": {
+              "kind": "code",
+              "title": "ExecTool",
+              "symbol": "ExecTool",
+              "language": "python",
+              "doc": "Run a shell command with deny-pattern and workspace containment.",
+              "sources": [
+                {
+                  "path": "tools/exec_tool.py",
+                  "line": 15,
+                  "endLine": 136,
+                  "label": "ExecTool"
+                }
+              ],
+              "code": "class ExecTool(Tool):\n    \"\"\"Execute shell commands with workspace containment.\"\"\"\n\n    def __init__(\n        self,\n        workspace: Path,\n        timeout: int = 60,\n        deny_patterns: list[str] | None = None,\n    ) -> None:\n        self._workspace = workspace.resolve()\n        self._timeout = min(timeout, 600)\n        self._deny_patterns = deny_patterns or []\n\n    @property\n    def name(self) -> str:\n        return \"exec\"\n\n    @property\n    def description(self) -> str:\n        return (\n            \"Execute a shell command and return its output. \"\n            \"The command runs inside the workspace directory.\"\n        )\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"command\": {\n                    \"type\": \"string\",\n                    \"description\": \"The shell command to execute.\",\n                },\n                \"workdir\": {\n                    \"type\": \"string\",\n                    \"description\": \"Working directory (relative to workspace). Defaults to workspace root.\",\n                },\n            },\n            \"required\": [\"command\"],\n        }\n\n    def _check_deny(self, command: str) -> str | None:\n        \"\"\"Return an error message if the command matches a deny pattern.\"\"\"\n        for pattern in self._deny_patterns:\n            if re.search(pattern, command):\n                return f\"Blocked by security policy: pattern '{pattern}'\"\n        return None\n\n    def _resolve_workdir(self, workdir: str | None) -> Path:\n        \"\"\"Resolve and validate working directory stays within workspace.\"\"\"\n        if workdir:\n            target = (self._workspace / workdir).resolve()\n        else:\n            target = self._workspace\n        if not self._is_under(target, self._workspace):\n            raise PermissionError(f\"Working directory escapes workspace: {workdir}\")\n        return target\n\n    @staticmethod\n    def _is_under(path: Path, parent: Path) -> bool:\n        try:\n            path.relative_to(parent)\n            return True\n        except ValueError:\n            return False\n\n    async def execute(self, **kwargs: Any) -> str:\n        command: str = kwargs.get(\"command\", \"\")\n        workdir: str | None = kwargs.get(\"workdir\")\n\n        if not command.strip():\n            return \"Error: empty command\"\n\n        deny = self._check_deny(command)\n        if deny:\n            return deny\n\n        try:\n            cwd = self._resolve_workdir(workdir)\n        except PermissionError as e:\n            return str(e)\n\n        try:\n            if sys.platform == \"win32\":\n                proc = await asyncio.create_subprocess_shell(\n                    command,\n                    stdout=asyncio.subprocess.PIPE,\n                    stderr=asyncio.subprocess.STDOUT,\n                    cwd=str(cwd),\n                    env=self._build_env(),\n                )\n            else:\n                proc = await asyncio.create_subprocess_shell(\n                    command,\n                    stdout=asyncio.subprocess.PIPE,\n                    stderr=asyncio.subprocess.STDOUT,\n                    cwd=str(cwd),\n                    env=self._build_env(),\n                    executable=\"/bin/bash\",\n                )\n\n            stdout, _ = await asyncio.wait_for(\n                proc.communicate(), timeout=self._timeout\n            )\n            output = stdout.decode(\"utf-8\", errors=\"replace\") if stdout else \"\"\n\n            # truncate very long output\n            if len(output) > 10000:\n                output = output[:5000] + \"\\n... (truncated) ...\\n\" + output[-5000:]\n\n            exit_info = f\"\\n[exit code: {proc.returncode}]\" if proc.returncode != 0 else \"\"\n            return output + exit_info\n\n        except asyncio.TimeoutError:\n            return f\"Error: command timed out after {self._timeout}s\"\n        except Exception as e:\n            return f\"Error: {e}\"\n\n    def _build_env(self) -> dict[str, str]:\n        \"\"\"Build environment for subprocess execution — inherit full parent env.\"\"\"\n        return dict(os.environ)"
+            }
+          },
+          {
+            "id": "run-script-tool",
+            "type": "backend",
+            "label": "RunScriptTool",
+            "pos": [
+              276,
+              220
+            ],
+            "summary": "Run a skill script inside its own venv.",
+            "detail": {
+              "kind": "code",
+              "title": "RunScriptTool",
+              "symbol": "RunScriptTool",
+              "language": "python",
+              "doc": "Run a skill script inside its own venv.",
+              "sources": [
+                {
+                  "path": "tools/run_script.py",
+                  "line": 14,
+                  "endLine": 116,
+                  "label": "RunScriptTool"
+                }
+              ],
+              "code": "class RunScriptTool(Tool):\n    \"\"\"Execute a Python script using a skill's venv (for isolated dependencies).\"\"\"\n\n    def __init__(self, workspace: Path, skills: list[Skill], timeout: int = 120) -> None:\n        self._workspace = workspace.resolve()\n        self._skills = {s.name: s for s in skills if s.available}\n        self._skill_dirs = [s.path.parent.resolve() for s in skills]\n        self._timeout = min(timeout, 600)\n\n    @property\n    def name(self) -> str:\n        return \"run_script\"\n\n    @property\n    def description(self) -> str:\n        names = \", \".join(self._skills.keys()) or \"(none)\"\n        return (\n            \"Execute a Python script with a skill's isolated dependencies. \"\n            f\"Available skills with venvs: {names}. \"\n            \"If no skill is specified, uses the system Python.\"\n        )\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"script\": {\n                    \"type\": \"string\",\n                    \"description\": \"Path to the Python script (relative to workspace) or inline code.\",\n                },\n                \"skill\": {\n                    \"type\": \"string\",\n                    \"description\": \"Skill name whose venv to use. Omit to use system Python.\",\n                },\n                \"args\": {\n                    \"type\": \"array\",\n                    \"items\": {\"type\": \"string\"},\n                    \"description\": \"Arguments to pass to the script.\",\n                },\n                \"inline\": {\n                    \"type\": \"boolean\",\n                    \"description\": \"If true, treat 'script' as inline Python code instead of a file path.\",\n                },\n            },\n            \"required\": [\"script\"],\n        }\n\n    async def execute(self, **kwargs: Any) -> str:\n        script: str = kwargs.get(\"script\", \"\")\n        skill_name: str = kwargs.get(\"skill\", \"\")\n        args: list[str] = kwargs.get(\"args\", [])\n        inline: bool = kwargs.get(\"inline\", False)\n\n        # resolve python executable\n        python_exe = sys.executable\n        if skill_name:\n            skill = self._skills.get(skill_name)\n            if not skill:\n                return f\"Error: skill '{skill_name}' not found or unavailable\"\n            python_exe = skill.get_python()\n\n        # build command\n        if inline:\n            cmd = [python_exe, \"-c\", script, *args]\n        else:\n            script_path = Path(script)\n            if script_path.is_absolute() and script_path.exists():\n                pass  # use as-is\n            elif (self._workspace / script).exists():\n                script_path = self._workspace / script\n            else:\n                # search skill directories\n                for skill_dir in self._skill_dirs:\n                    candidate = skill_dir / script\n                    if candidate.exists():\n                        script_path = candidate\n                        break\n                else:\n                    return f\"Error: script not found: {script} (searched workspace and skill dirs)\"\n            cmd = [python_exe, str(script_path), *args]\n\n        try:\n            proc = await asyncio.create_subprocess_exec(\n                *cmd,\n                stdout=asyncio.subprocess.PIPE,\n                stderr=asyncio.subprocess.STDOUT,\n                cwd=str(self._workspace),\n            )\n            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)\n            output = stdout.decode(\"utf-8\", errors=\"replace\") if stdout else \"\"\n\n            if len(output) > 10000:\n                output = output[:5000] + \"\\n... (truncated) ...\\n\" + output[-5000:]\n\n            exit_info = f\"\\n[exit code: {proc.returncode}]\" if proc.returncode != 0 else \"\"\n            return output + exit_info\n\n        except asyncio.TimeoutError:\n            return f\"Error: script timed out after {self._timeout}s\"\n        except Exception as e:\n            return f\"Error: {e}\""
+            }
+          },
+          {
+            "id": "load-skill-tool",
+            "type": "cloud",
+            "label": "LoadSkillTool",
+            "pos": [
+              512,
+              220
+            ],
+            "summary": "Load a skill body into context on demand.",
+            "detail": {
+              "kind": "code",
+              "title": "LoadSkillTool",
+              "symbol": "LoadSkillTool",
+              "language": "python",
+              "doc": "Load a skill body into context on demand.",
+              "sources": [
+                {
+                  "path": "tools/load_skill.py",
+                  "line": 11,
+                  "endLine": 66,
+                  "label": "LoadSkillTool"
+                }
+              ],
+              "code": "class LoadSkillTool(Tool):\n    \"\"\"Load a skill's full content by name for immediate use.\"\"\"\n\n    def __init__(self, skills: list[Skill]) -> None:\n        self._skills = {s.name: s for s in skills}\n\n    @property\n    def name(self) -> str:\n        return \"load_skill\"\n\n    @property\n    def description(self) -> str:\n        return (\n            \"Load a skill's full instructions by name. Use this when you identify \"\n            \"a relevant skill from the skills summary. Returns the complete SKILL.md \"\n            \"content with paths resolved.\"\n        )\n\n    @property\n    def parameters(self) -> dict[str, Any]:\n        return {\n            \"type\": \"object\",\n            \"properties\": {\n                \"skill_name\": {\n                    \"type\": \"string\",\n                    \"description\": \"The name of the skill to load (from the skills summary).\",\n                },\n            },\n            \"required\": [\"skill_name\"],\n        }\n\n    async def execute(self, **kwargs: Any) -> str:\n        skill_name: str = kwargs.get(\"skill_name\", \"\")\n\n        if not skill_name:\n            return \"Error: skill_name is required\"\n\n        skill = self._skills.get(skill_name)\n        if not skill:\n            available = \", \".join(self._skills.keys())\n            return f\"Error: skill '{skill_name}' not found. Available skills: {available}\"\n\n        if not skill.available:\n            missing = []\n            if skill.requires.bins:\n                missing.append(f\"CLI tools: {', '.join(skill.requires.bins)}\")\n            if skill.requires.env:\n                missing.append(f\"env vars: {', '.join(skill.requires.env)}\")\n            return f\"Error: skill '{skill_name}' is unavailable. Missing: {'; '.join(missing)}\"\n\n        # Replace {SKILL_DIR} with actual path\n        skill_dir = str(skill.path.parent.resolve())\n        content = skill.content.replace(\"{SKILL_DIR}\", skill_dir)\n\n        return content"
+            }
+          }
+        ],
+        "connectors": [
+          {
+            "id": "tp1",
+            "from": "read-file-tool",
+            "to": "list-dir-tool",
+            "label": "same workspace guard",
+            "variant": "dashed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "skills",
+      "type": "cloud",
+      "label": "skills",
+      "pos": [
+        930,
+        720
+      ],
+      "sublabel": "requirements",
+      "tag": "per-skill venv",
+      "summary": "Skill discovery, frontmatter parsing, and per-skill dependency resolution.",
+      "detail": {
+        "kind": "code",
+        "title": "skills.py",
+        "symbol": "skills",
+        "language": "python",
+        "fields": [
+          {
+            "name": "Skill.name / .description / .always",
+            "type": "str / str / bool",
+            "doc": "From SKILL.md frontmatter."
+          },
+          {
+            "name": "Skill.content",
+            "type": "str",
+            "doc": "Body without frontmatter."
+          },
+          {
+            "name": "Skill.requires",
+            "type": "SkillRequirements",
+            "doc": "bins / env / pip."
+          },
+          {
+            "name": "Skill.available",
+            "type": "bool",
+            "doc": "False when requirements are unmet."
+          }
+        ],
+        "methods": [
+          {
+            "name": "venv_dir",
+            "signature": "@property def venv_dir(self) -> Path",
+            "doc": "Per-skill venv beside SKILL.md.",
+            "type": "property",
+            "value": "self → Path"
+          },
+          {
+            "name": "get_python",
+            "signature": "def get_python(self) -> str",
+            "doc": "venv interpreter, or sys.executable.",
+            "type": "method",
+            "value": "self → str"
+          },
+          {
+            "name": "load_skills / build_skills_summary / get_always_skills / ensure_skill_deps",
+            "doc": "Module-level helpers used by AgentRunner.",
+            "type": "helpers",
+            "value": "workspace/skills → list[Skill] / str / None"
+          }
+        ],
+        "sources": [
+          {
+            "path": "skills.py",
+            "line": 1,
+            "endLine": 246
+          }
+        ],
+        "code": "\"\"\"Skills loader — markdown files with optional YAML frontmatter.\n\nEach skill can declare dependencies in its frontmatter:\n\n    ---\n    name: my-skill\n    description: Does cool things.\n    requires:\n      bins: [curl, ffmpeg]          # CLI tools that must be on PATH\n      env: [MY_API_KEY]             # environment variables that must be set\n      pip: [requests>=2.28, bs4]   # Python packages (installed into a per-skill venv)\n    ---\n\n- `bins` and `env` are checked at load time; missing requirements mark the skill as unavailable.\n- `pip` dependencies are installed into an isolated venv under `.skills_venvs/<skill_name>/`\n  on first use, so different skills can depend on conflicting package versions without issue.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport os\nimport re\nimport shutil\nimport sys\nfrom dataclasses import dataclass, field\nfrom pathlib import Path\nfrom typing import Any\n\nimport yaml\n\n\n@dataclass\nclass SkillRequirements:\n    \"\"\"Parsed `requires` block from skill frontmatter.\"\"\"\n\n    bins: list[str] = field(default_factory=list)\n    env: list[str] = field(default_factory=list)\n    pip: list[str] = field(default_factory=list)\n\n\n@dataclass\nclass Skill:\n    \"\"\"A loaded skill.\"\"\"\n\n    name: str\n    description: str\n    always: bool\n    content: str  # body without frontmatter\n    path: Path\n    requires: SkillRequirements = field(default_factory=SkillRequirements)\n    available: bool = True  # False if requirements are not met\n\n    @property\n    def venv_dir(self) -> Path:\n        \"\"\"Per-skill venv location (sibling of the skill's SKILL.md).\"\"\"\n        return self.path.parent / \".venv\"\n\n    def get_python(self) -> str:\n        \"\"\"Return the python executable for this skill's venv, or sys.executable.\"\"\"\n        if self.requires.pip and self.venv_dir.is_dir():\n            if sys.platform == \"win32\":\n                return str(self.venv_dir / \"Scripts\" / \"python.exe\")\n            return str(self.venv_dir / \"bin\" / \"python\")\n        return sys.executable\n\n\n_FRONTMATTER_RE = re.compile(r\"^---\\s*\\n(.*?)\\n---\\s*\\n\", re.DOTALL)\n\n\ndef _check_bins(bins: list[str]) -> list[str]:\n    \"\"\"Return list of missing CLI tools.\"\"\"\n    return [b for b in bins if not shutil.which(b)]\n\n\ndef _check_env(env_vars: list[str]) -> list[str]:\n    \"\"\"Return list of missing environment variables.\"\"\"\n    return [v for v in env_vars if not os.environ.get(v)]\n\n\nasync def _ensure_venv(skill: Skill) -> bool:\n    \"\"\"Create the per-skill venv and install pip deps if needed.\n\n    Returns True on success, False on failure.\n    \"\"\"\n    if not skill.requires.pip:\n        return True\n\n    venv_dir = skill.venv_dir\n    pip_exe = venv_dir / (\"Scripts/pip.exe\" if sys.platform == \"win32\" else \"bin/pip\")\n\n    # create venv if it doesn't exist or pip is missing\n    if not venv_dir.is_dir() or not pip_exe.exists():\n        try:\n            if venv_dir.is_dir():\n                shutil.rmtree(venv_dir)\n            proc = await asyncio.create_subprocess_exec(\n                sys.executable, \"-m\", \"venv\", str(venv_dir),\n                stdout=asyncio.subprocess.PIPE,\n                stderr=asyncio.subprocess.PIPE,\n            )\n            _, stderr = await proc.communicate()\n            if proc.returncode != 0:\n                raise RuntimeError(stderr.decode(errors=\"replace\"))\n        except (RuntimeError, FileNotFoundError, OSError) as e:\n            print(f\"[toolsclaw] Failed to create venv for skill '{skill.name}': {e}\")\n            return False\n\n    # install dependencies\n    try:\n        proc = await asyncio.create_subprocess_exec(\n            str(pip_exe), \"install\", \"-q\", *skill.requires.pip,\n            stdout=asyncio.subprocess.PIPE,\n            stderr=asyncio.subprocess.PIPE,\n        )\n        _, stderr = await proc.communicate()\n        if proc.returncode != 0:\n            raise RuntimeError(stderr.decode(errors=\"replace\"))\n    except (RuntimeError, FileNotFoundError, OSError) as e:\n        print(f\"[toolsclaw] Failed to install deps for skill '{skill.name}': {e}\")\n        return False\n\n    return True\n\n\ndef _parse_skill(path: Path) -> Skill | None:\n    \"\"\"Parse a SKILL.md file into a Skill, or None on failure.\"\"\"\n    try:\n        text = path.read_text(encoding=\"utf-8\")\n    except OSError:\n        return None\n\n    meta: dict[str, Any] = {}\n    content = text\n\n    m = _FRONTMATTER_RE.match(text)\n    if m:\n        try:\n            meta = yaml.safe_load(m.group(1)) or {}\n        except yaml.YAMLError:\n            meta = {}\n        content = text[m.end():]\n\n    # parse requirements\n    raw_req = meta.get(\"requires\", {})\n    requires = SkillRequirements(\n        bins=raw_req.get(\"bins\", []),\n        env=raw_req.get(\"env\", []),\n        pip=raw_req.get(\"pip\", []),\n    )\n\n    # check availability\n    missing_bins = _check_bins(requires.bins)\n    missing_env = _check_env(requires.env)\n    available = not missing_bins and not missing_env\n\n    if missing_bins:\n        print(f\"[toolsclaw] Skill '{meta.get('name', path.parent.name)}' missing CLI: {', '.join(missing_bins)}\")\n    if missing_env:\n        print(f\"[toolsclaw] Skill '{meta.get('name', path.parent.name)}' missing ENV: {', '.join(missing_env)}\")\n\n    return Skill(\n        name=meta.get(\"name\", path.parent.name),\n        description=meta.get(\"description\", \"\"),\n        always=bool(meta.get(\"always\", False)),\n        content=content.strip(),\n        path=path,\n        requires=requires,\n        available=available,\n    )\n\n\ndef load_skills(\n    workspace: Path,\n    builtin_dir: Path | None = None,\n    *,\n    extra_dirs: list[Path] | None = None,\n) -> list[Skill]:\n    \"\"\"Discover and load skills from workspace, built-in, and extra directories.\n\n    Search order (first-found wins for duplicate names):\n      1. workspace/skills\n      2. extra_dirs (in order)\n      3. builtin_dir\n    \"\"\"\n    skills: list[Skill] = []\n    seen: set[str] = set()\n\n    search_dirs: list[Path] = [workspace / \"skills\"]\n    if extra_dirs:\n        search_dirs.extend(extra_dirs)\n    search_dirs.append(builtin_dir or Path())\n\n    for search_dir in search_dirs:\n        if not search_dir.is_dir():\n            continue\n        for skill_md in sorted(search_dir.rglob(\"SKILL.md\")):\n            skill = _parse_skill(skill_md)\n            if skill and skill.name not in seen:\n                skills.append(skill)\n                seen.add(skill.name)\n\n    return skills\n\n\nasync def ensure_skill_deps(skills: list[Skill]) -> None:\n    \"\"\"Ensure all pip dependencies are installed for skills that need them.\n\n    Call this once after loading skills. Each skill's venv is created lazily\n    only if the skill declares `requires.pip` and is otherwise available.\n    Skills with pip dependencies are processed in parallel.\n    \"\"\"\n    pip_skills = [s for s in skills if s.available and s.requires.pip]\n    if not pip_skills:\n        return\n\n    async def _try_ensure(skill: Skill) -> None:\n        if not await _ensure_venv(skill):\n            skill.available = False\n\n    await asyncio.gather(*(_try_ensure(s) for s in pip_skills))\n\n\ndef get_always_skills(skills: list[Skill]) -> list[Skill]:\n    \"\"\"Return skills marked as always-on and available.\"\"\"\n    return [s for s in skills if s.always and s.available]\n\n\ndef build_skills_summary(skills: list[Skill]) -> str:\n    \"\"\"Build a markdown summary of available skills.\n\n    The summary is designed for progressive disclosure:\n    - Always-on skills have their full content injected separately\n    - Other skills show name + description for quick matching\n    - Agent uses load_skill tool to load full content on demand\n    \"\"\"\n    if not skills:\n        return \"\"\n    lines = []\n    for s in skills:\n        if not s.available:\n            continue\n        flag = \" (always active)\" if s.always else \"\"\n        desc = f\" — {s.description}\" if s.description else \"\"\n        lines.append(f\"- **{s.name}**{desc}{flag}\")\n    return \"\\n\".join(lines)"
+      }
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "toolsclaw package",
+      "wraps": [
+        "cli",
+        "sdk",
+        "runner",
+        "hook",
+        "memory",
+        "persistent-memory",
+        "provider",
+        "skills",
+        "config",
+        "tools-package",
+        "tool"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "e1",
+      "from": "cli",
+      "to": "sdk",
+      "label": "delegates",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e2",
+      "from": "sdk",
+      "to": "runner",
+      "label": "drives",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e3",
+      "from": "runner",
+      "to": "provider",
+      "label": "chat + tools",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e4",
+      "from": "runner",
+      "to": "tool",
+      "label": "executes via registry",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          530,
+          180
+        ],
+        [
+          990,
+          180
+        ]
+      ],
+      "labelAt": [
+        760,
+        172
+      ]
+    },
+    {
+      "id": "e5",
+      "from": "runner",
+      "to": "hook",
+      "label": "lifecycle callbacks",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        530,
+        400
+      ]
+    },
+    {
+      "id": "e6",
+      "from": "tool",
+      "to": "tools-package",
+      "label": "implemented by",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        990,
+        400
+      ]
+    },
+    {
+      "id": "e7",
+      "from": "hook",
+      "to": "memory",
+      "label": "compresses with",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        420,
+        620
+      ]
+    },
+    {
+      "id": "e8",
+      "from": "hook",
+      "to": "persistent-memory",
+      "label": "recalls + saves",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        635,
+        620
+      ]
+    },
+    {
+      "id": "e9",
+      "from": "sdk",
+      "to": "config",
+      "label": "configured by",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        310,
+        400
+      ]
+    },
+    {
+      "id": "e10",
+      "from": "runner",
+      "to": "skills",
+      "label": "loads",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "right",
+      "via": [
+        [
+          530,
+          140
+        ],
+        [
+          1160,
+          140
+        ],
+        [
+          1160,
+          750
+        ]
+      ],
+      "labelAt": [
+        700,
+        132
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "How to read this",
+      "items": [
+        "Single-click any node for its full detail: fields, methods, and line-linked source.",
+        "Double-click a node marked with the open badge to descend into its own diagram.",
+        "The breadcrumb above the diagram walks back out; Esc steps back one level."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Core loop",
+      "items": [
+        "AgentRunner._run_sync iterates up to config.max_iterations.",
+        "Each round: call the model, execute any tool calls, append results, repeat.",
+        "ToolRegistry.execute converts exceptions into error strings so one failure cannot abort the run."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety boundaries",
+      "items": [
+        "ExecTool enforces workspace containment plus a deny-pattern list from ExecConfig.",
+        "Every file tool resolves and checks its target stays under the workspace.",
+        "Persistent memory validates names and types at construction time."
+      ]
+    }
+  ]
+}

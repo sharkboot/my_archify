@@ -1,6 +1,6 @@
 ---
 name: archify
-description: Create polished, validated architecture, workflow, sequence, data-flow, and lifecycle/state diagrams as explorable standalone HTML with inline SVG, dark/light themes, optional trace motion, and PNG/JPEG/WebP/SVG/WebM export. Accept plain-language requirements or pasted Mermaid flowchart, sequenceDiagram, and stateDiagram input; inspect repository evidence when the diagram must reflect real code. Use when the user asks to visualize system architecture, infrastructure, cloud/security/network topology, technical workflows, API call sequences, request lifecycles, data pipelines, ETL/ELT, data lineage, state machines, or to convert/beautify Mermaid.
+description: Create polished, validated architecture, workflow, sequence, data-flow, and lifecycle/state diagrams as explorable standalone HTML with inline SVG, dark/light themes, optional trace motion, and PNG/JPEG/WebP/SVG/WebM export. Architecture diagrams MUST be drill-down capable: every node carries detail (code leaves with fields/methods/sources/notes, or nested diagrams with their own components/connectors). Accept plain-language requirements or pasted Mermaid flowchart, sequenceDiagram, and stateDiagram input; inspect repository evidence when the diagram must reflect real code. Use when the user asks to visualize system architecture, infrastructure, cloud/security/network topology, technical workflows, API call sequences, request lifecycles, data pipelines, ETL/ELT, data lineage, state machines, or to convert/beautify Mermaid.
 license: MIT
 metadata:
   version: "2.16"
@@ -17,7 +17,7 @@ Create a self-contained, interactive HTML diagram from a small typed JSON specif
 Use this bounded path for ordinary generation. Do not read the optional Viewer Runtime reference unless the user asks about those features.
 
 1. Choose `architecture`, `workflow`, `sequence`, `dataflow`, or `lifecycle` from the question.
-2. Read one matching schema in `schemas/`, `schemas/common.schema.json`, and one matching JSON example in `examples/`. Read only those files. Fresh authorship means new stable IDs, domain wording, and layout; use the example for field shape, not facts. New workflow sources use `schema_version: 2` and its readable layout contract; keep `schema_version: 1` only when preserving an existing workflow's fixed geometry. When real product identity matters, query `node bin/archify.mjs brands "<name>" --json`; read `references/brand-marks.md` only for an unknown brand with a user-provided URL.
+2. Read one matching schema in `schemas/`, `schemas/common.schema.json`, and one matching JSON example in `examples/`. For architecture, prefer `examples/toolsclaw-atlas.architecture.json` (drill-down pattern) or `examples/web-app-drilldown.architecture.json` (multi-level nesting). Read only those files. Fresh authorship means new stable IDs, domain wording, and layout; use the example for field shape, not facts. New workflow sources use `schema_version: 2` and its readable layout contract; keep `schema_version: 1` only when preserving an existing workflow's fixed geometry. When real product identity matters, query `node bin/archify.mjs brands "<name>" --json`; read `references/brand-marks.md` only for an unknown brand with a user-provided URL.
 3. Artifact first: the next tool action must write the candidate. Write the candidate before inspecting renderer internals. Do not plan exact coordinates in prose. Start with one clear main path, short side branches, sparse labels, and at most 12 primary nodes. Set `meta.quality_profile` to `"showcase"` unless the user explicitly requests a dense `standard` map. Start with automatic routes and labels. Do not add `via`, `channelX`, `channelY`, or `labelAt` before a diagnostic calls for one; apply at most one diagnosed geometry control per repair.
 4. Validate after every candidate edit and immediately before handoff:
 
@@ -92,6 +92,57 @@ Read Mermaid for topology and meaning, then author fresh Archify JSON; do not me
 - Never accept an edge crossing an unrelated opaque node, an ambiguous shared corridor, or a relationship label masking another route.
 
 Read `references/authoring-contract.md` only when you need field enums, spacing math, geometry repair rules, repository evidence, or mode-specific placement.
+
+## Drill-down architecture (required for all architecture outputs)
+
+Every architecture diagram **must** be drill-down capable. Every top-level component carries a `detail` payload — this is not optional. The rendered HTML uses a two-column panel layout (输入 | 输出) with section labels, and code blocks get a header bar with a copy button. See `examples/toolsclaw-atlas.architecture.json` for the canonical pattern.
+
+### Detail kinds
+
+| `detail.kind` | Use when | Contents |
+|---|---|---|
+| `"code"` | A leaf code artifact (class, function, module) | `title`, `symbol`, `language`, `signature`, `doc`, `sources[]`, `fields[]`, `methods[]`, `code`, `notes[]`. Terminates descent. |
+| `"diagram"` | A node that deserves its own sub-diagram | `title`, `subtitle`, `components[]`, `connectors[]`. Each child may carry its own `detail`, recursing to arbitrary depth. |
+
+### Code-detail layout rules
+
+- **Fields section** → left column, labeled **输入**. Shows each field's `name`, `type`, `doc`. When empty, show "无字段".
+- **Methods section** → right column, labeled **输出**. Shows each method's `name`, `signature`, `type`, `doc`, `value` (I/O flow). Each method gets an inline summary row with its signature and I/O flow.
+- **Summary row** (full-width, below the two columns) → `subtitle`, `signature`, `doc`, `sourcesMarkup`, `notes`. Shown only when at least one field is present.
+- **Implementation row** (full-width, last) → `codeMarkup(detail.code)`. Renders in a card with a header bar showing "实现" and a copy button.
+
+### Diagram-detail layout rules
+
+A `kind: "diagram"` detail defines a nested sub-graph. Each child component may carry its own `detail`. The renderer handles layout automatically when `pos` is omitted; provide `pos: [x, y]` only when explicit placement is needed. Connectors use the same routing contract as the main graph.
+
+### Example pattern
+
+```json
+{
+  "id": "runner",
+  "type": "backend",
+  "label": "AgentRunner",
+  "detail": {
+    "kind": "diagram",
+    "title": "Runner internals",
+    "components": [
+      { "id": "init", "type": "backend", "label": "__init__",
+        "detail": { "kind": "code", "title": "__init__", "symbol": "runner.py:72", "language": "python",
+          "signature": "def __init__(self, config: Config, *, skills_dir: Path | str | None = None) -> None",
+          "fields": [{ "name": "_config", "type": "Config", "doc": "Root configuration." }],
+          "methods": [{ "name": "run", "signature": "async def run(self, msg: str) -> str", "doc": "Main loop." }],
+          "sources": [{ "path": "runner.py", "line": 72, "endLine": 98 }],
+          "code": "def __init__(self, config):\n    self._config = config\n"
+        }
+      },
+      { "id": "run", "type": "backend", "label": "run()", "detail": { "kind": "code", ... } }
+    ],
+    "connectors": [
+      { "from": "init", "to": "run", "label": "calls" }
+    ]
+  }
+}
+```
 
 ## Delivery
 

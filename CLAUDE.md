@@ -114,12 +114,12 @@ Passport panel; **double-click** descends into that node's own sub-diagram, recu
 no children. At the leaves, a code symbol node shows its complete content (fields, methods, verbatim
 implementation bodies). All output stays in one self-contained HTML.
 
-The `components[].detail` field is optional and is either:
+Every architecture component **must** carry a `detail` payload — it is not optional. The `components[].detail` field is either:
 
 - **`kind: "diagram"`** — a nested diagram (`components`/`connectors`, recurses); child nodes may each carry their own `detail`.
-- **`kind: "code"`** — a leaf code artifact (title, subtitle, symbol, language, signature, doc, sources, fields, methods, code, notes); terminates descent.
+- **`kind: "code"`** — a leaf code artifact (title, subtitle, symbol, language, signature, doc, sources, fields, methods, code, notes); terminates descent. Code nodes render in a two-column panel (输入 | 输出) with labeled sections, inline method summaries, and a full-width code card with header bar and copy button.
 
-Author `components[].detail` on any top-level or nested component; nodes that carry it emit `data-node-drilldown` and a drill-down badge, and the viewer only offers a dive when a payload exists (code leaves refuse double-click).
+Every top-level and nested component **must** carry `detail`. Nodes that carry it emit `data-node-drilldown` and render a drill-down badge; the viewer offers a dive when a payload exists (code leaves refuse double-click). The detail panel uses a two-column grid labeled **输入** (left, fields) and **输出** (right, methods), with a full-width summary row below and a code card with copy button at the bottom. See `examples/toolsclaw-atlas.architecture.json` for the canonical pattern.
 
 ### Interaction contract (two viewer registrations, both required)
 

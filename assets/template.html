@@ -4933,11 +4933,13 @@
     #drilldown-detail:not([hidden]) {
       position: fixed;
       right: 0;
-      top: 0;
+      top: 4.5rem;
       width: 560px;
-      max-height: 100vh;
+      max-height: calc(100vh - 4.5rem);
       overflow-y: auto;
-      z-index: 60;
+      /* UI-002: above the toolbar (z-index 100) so the whole header bar is a
+         grab handle instead of being covered by the toolbar's right edge. */
+      z-index: 120;
       box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
     }
     /* When the detail panel is open, shift the diagram left so nodes on the
@@ -4952,11 +4954,12 @@
     #node-detail-panel {
       position: fixed;
       right: 0;
-      top: 0;
+      top: 4.5rem;
       width: 560px;
-      max-height: 100vh;
+      max-height: calc(100vh - 4.5rem);
       overflow-y: auto;
-      z-index: 55;
+      /* UI-002: above the toolbar so the whole header is grabbable. */
+      z-index: 120;
       box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
       border: 1px solid var(--toolbar-border);
       border-radius: 0.85rem;
